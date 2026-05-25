@@ -89,15 +89,36 @@ def apply_scale(
 def repair_mesh(mesh):
     """
     重複頂点・退化三角形・法線の修復。
-    trimesh が自動で多くを処理してくれる。
+    trimesh のバージョン差異を吸収して処理する。
     """
     import trimesh
+    import numpy as np
 
     # 重複頂点をマージ
     mesh.merge_vertices()
-    # 退化面の除去
-    mesh.remove_degenerate_faces()
-    mesh.remove_duplicate_faces()
+
+    # 退化面の除去（trimesh 4.x でAPIが変わったため両対応）
+    try:
+        # trimesh 4.x 以降
+        unique_mask = trimesh.triangles.nondegenerate(mesh.triangles)
+        mesh.update_faces(unique_mask)
+    except Exception:
+        try:
+            # trimesh 3.x 系
+            mesh.remove_degenerate_faces()
+            mesh.remove_duplicate_faces()
+        except Exception:
+            pass  # どちらも失敗した場合はスキップ
+
+    # 重複面の除去（4.x対応）
+    try:
+        mesh.update_faces(mesh.unique_faces())
+    except Exception:
+        try:
+            mesh.remove_duplicate_faces()
+        except Exception:
+            pass
+
     # 法線の再計算
     mesh.fix_normals()
 
@@ -197,6 +218,7 @@ def postprocess(
     output_dir: str | Path,
     base_name: str = "asset",
     config: Optional[PostprocessConfig] = None,
+    cad_unit: str = "mm",
 ) -> dict[str, Path]:
     """
     メッシュファイルを受け取り、スケール補正・修復・LOD生成・エクスポートを一括実行。
@@ -204,21 +226,27 @@ def postprocess(
     Parameters
     ----------
     mesh_path          : 推論が出力した .glb/.obj
-    cad_dimensions_mm  : CADMeta.dimensions
+    cad_dimensions_mm  : CADMeta.dimensions（CAD座標系のまま）
     output_dir         : 出力ディレクトリ
     base_name          : 出力ファイルの基名
     config             : PostprocessConfig（省略時はデフォルト）
-
-    Returns
-    -------
-    dict[str, Path]  LOD ごとの保存パス
+    cad_unit           : CAD図面の単位 ("mm","cm","m","inch","foot")
+                         parser.py の CADMeta.unit をそのまま渡す
     """
     import trimesh
+
+    # CAD座標値 → mm に統一してから apply_scale に渡す
+    _to_mm = {"mm": 1.0, "cm": 10.0, "m": 1000.0, "inch": 25.4, "foot": 304.8}
+    scale_to_mm = _to_mm.get(cad_unit, 1.0)
+    dimensions_in_mm = cad_dimensions_mm * scale_to_mm
+
+    logger.info(f"CAD unit: {cad_unit}  ->  dimensions in mm: "
+                f"{dimensions_in_mm[0]:.1f} / {dimensions_in_mm[1]:.1f} / {dimensions_in_mm[2]:.1f}")
 
     cfg = config or PostprocessConfig()
     mesh = trimesh.load(str(mesh_path), force="mesh")
 
     mesh = repair_mesh(mesh)
-    mesh = apply_scale(mesh, cad_dimensions_mm, target_unit=cfg.target_unit)
+    mesh = apply_scale(mesh, dimensions_in_mm, target_unit=cfg.target_unit)
     lods = generate_lods(mesh, cfg.lod_face_counts)
     return export_gltf(lods, output_dir, base_name)

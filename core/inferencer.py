@@ -101,6 +101,7 @@ class Zero123PlusPlusInferencer:
                 self.config.model_id,
                 custom_pipeline="sudo-ai/zero123plus-pipeline",
                 torch_dtype=dtype,
+                trust_remote_code=True,  # Zero123++ はカスタムpipeline.pyが必要
             ).to(self.device)
 
             if self.config.enable_attention_slicing:
@@ -222,20 +223,28 @@ class Zero123PlusPlusInferencer:
 
         logger.info("Running TSDF Fusion ...")
 
-        # ── ① 仮深度マップ生成（プレースホルダー） ──
-        # 実運用では Depth-Anything v2 等で深度推定した結果を使う
+        # ── ① 実際の画像サイズから Intrinsic を動的に生成 ──
+        # Zero123++ のグリッド分割結果は環境によってサイズが変わるため
+        # 最初の view から実サイズを取得して合わせる
+        first_rgb = np.array(views[0].convert("RGB"), dtype=np.uint8)
+        img_h, img_w = first_rgb.shape[:2]
+        logger.info(f"View image size: {img_w}×{img_h}")
+
         volume = o3d.pipelines.integration.ScalableTSDFVolume(
             voxel_length=4.0 / 512.0,
             sdf_trunc=0.04,
             color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
         )
 
-        # 仮の内部パラメータ（実際は CADMeta.dimensions から算出する）
+        # 画像サイズから焦点距離・主点を算出（標準的な 60° FoV 相当）
+        fx = fy = max(img_w, img_h) * 0.8
+        cx, cy = img_w / 2.0, img_h / 2.0
         intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            width=320, height=320,
-            fx=256.0, fy=256.0,
-            cx=160.0, cy=160.0,
+            width=img_w, height=img_h,
+            fx=fx, fy=fy,
+            cx=cx, cy=cy,
         )
+        logger.info(f"Intrinsic: w={img_w}, h={img_h}, fx={fx:.1f}, cx={cx:.1f}, cy={cy:.1f}")
 
         for i, view in enumerate(views):
             rgb = np.array(view.convert("RGB"), dtype=np.uint8)
