@@ -127,6 +127,7 @@ def run(
         output_dir=asset_dir,
         base_name=base_name,
         config=post_cfg,
+        cad_unit=meta.unit,   # inch/mm/cm/m を正しく単位変換
     )
 
     # 結果サマリ
