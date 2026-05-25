@@ -183,29 +183,44 @@ def generate_lods(
 # エクスポート
 # ─────────────────────────────────────────────
 
-def export_gltf(
+def export_meshes(
     lods: dict[str, object],
     output_dir: str | Path,
     base_name: str = "asset",
+    export_format: str = "obj",
 ) -> dict[str, Path]:
     """
-    LOD ごとに glTF (.glb) を書き出す。
+    LOD ごとにメッシュを書き出す。
+
+    Parameters
+    ----------
+    export_format : "obj" (Unity標準・追加パッケージ不要) or "glb" (glTFast必要)
 
     Returns
     -------
     dict: {"LOD0": Path, "LOD1": Path, ...}
     """
+    fmt = export_format.lower().lstrip(".")
+    if fmt not in ("obj", "glb", "gltf"):
+        logger.warning(f"Unknown format '{fmt}', falling back to obj")
+        fmt = "obj"
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     saved = {}
 
     for lod_name, mesh in lods.items():
-        out_path = output_dir / f"{base_name}_{lod_name}.glb"
+        out_path = output_dir / f"{base_name}_{lod_name}.{fmt}"
         mesh.export(str(out_path))
         saved[lod_name] = out_path
         logger.info(f"Exported: {out_path}")
 
     return saved
+
+
+# 後方互換エイリアス
+def export_gltf(lods, output_dir, base_name="asset"):
+    return export_meshes(lods, output_dir, base_name, export_format="glb")
 
 
 # ─────────────────────────────────────────────
@@ -219,6 +234,7 @@ def postprocess(
     base_name: str = "asset",
     config: Optional[PostprocessConfig] = None,
     cad_unit: str = "mm",
+    export_format: str = "obj",
 ) -> dict[str, Path]:
     """
     メッシュファイルを受け取り、スケール補正・修復・LOD生成・エクスポートを一括実行。
@@ -231,7 +247,7 @@ def postprocess(
     base_name          : 出力ファイルの基名
     config             : PostprocessConfig（省略時はデフォルト）
     cad_unit           : CAD図面の単位 ("mm","cm","m","inch","foot")
-                         parser.py の CADMeta.unit をそのまま渡す
+    export_format      : 出力フォーマット "obj"(デフォルト) / "glb"
     """
     import trimesh
 
@@ -249,4 +265,4 @@ def postprocess(
     mesh = repair_mesh(mesh)
     mesh = apply_scale(mesh, dimensions_in_mm, target_unit=cfg.target_unit)
     lods = generate_lods(mesh, cfg.lod_face_counts)
-    return export_gltf(lods, output_dir, base_name)
+    return export_meshes(lods, output_dir, base_name, export_format=export_format)

@@ -52,8 +52,10 @@ def run(
     lod0: int        = typer.Option(10_000, help="LOD0 最大ポリゴン数"),
     lod1: int        = typer.Option(4_000,  help="LOD1 最大ポリゴン数"),
     lod2: int        = typer.Option(1_000,  help="LOD2 最大ポリゴン数"),
+    fmt: str         = typer.Option("obj", "--format", help="出力フォーマット: obj / glb (デフォルト: obj)"),
+    force_unit: str  = typer.Option("", "--force-unit", help="単位を強制指定: mm / cm / m / inch / foot (省略時はDXFヘッダから自動判定)"),
 ):
-    """DXF → 三面図レンダリング → Zero123++ 推論 → glTF 出力 を一括実行する。"""
+    """DXF → 三面図レンダリング → Zero123++ 推論 → 3Dアセット出力 を一括実行する。"""
 
     # ── Step 1: DXF パース ───────────────────────
     console.rule("[bold cyan]Step 1: DXFパース・三面図レンダリング")
@@ -121,13 +123,19 @@ def run(
     asset_dir = output_dir / "assets"
     base_name = Path(dxf_path).stem
 
+    # --force-unit が指定されていればそちらを優先、なければDXFヘッダの単位を使う
+    effective_unit = force_unit if force_unit else meta.unit
+    if force_unit:
+        console.print(f"[yellow]単位を強制指定: {force_unit}  (DXFヘッダ: {meta.unit})")
+
     exported = postprocess(
         mesh_path=raw_mesh_path,
         cad_dimensions_mm=meta.dimensions,
         output_dir=asset_dir,
         base_name=base_name,
         config=post_cfg,
-        cad_unit=meta.unit,   # inch/mm/cm/m を正しく単位変換
+        cad_unit=effective_unit,
+        export_format=fmt,
     )
 
     # 結果サマリ
