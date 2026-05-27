@@ -1,26 +1,56 @@
 """
 core/parser.py
 ==============
-DXF/DWG ファイルを読み込み、三面図画像とメタデータを返す純粋関数群。
+DXF/DWG ファイルを読み込み、三面図画像・メタデータ・メッシュを返す純粋関数群。
 
-依存: ezdxf, matplotlib, numpy, Pillow
+DXFの種類を自動判定して2ルートに分岐する:
+
+  Route A  2D図面 (LINE/ARC/CIRCLE 等、Z=0)
+             → 三面図画像を生成して Zero123++ 推論へ
+
+  Route B  3D POLYFACEメッシュ (Z値あり、メッシュが既に定義済み)
+             → メッシュを直接抽出して推論をスキップ
+
+依存: ezdxf, matplotlib, numpy, Pillow, trimesh
 """
 
 from __future__ import annotations
 
 import io
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import ezdxf
 import matplotlib
-matplotlib.use("Agg")  # ヘッドレス環境向け
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
 import numpy as np
 from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────
+# 定数
+# ─────────────────────────────────────────────
+
+_INSUNITS_TO_MM: dict[int, float] = {
+    0: 1.0,     # 未定義
+    1: 25.4,    # inch
+    2: 304.8,   # foot
+    4: 1.0,     # mm
+    5: 10.0,    # cm
+    6: 1000.0,  # m
+}
+
+_INSUNITS_NAME: dict[int, str] = {
+    1: "inch", 2: "foot", 4: "mm", 5: "cm", 6: "m",
+}
+
+# POLYFACE MESH フラグ (DXF仕様: bit6)
+_POLYFACE_FLAG = 0x40
 
 
 # ─────────────────────────────────────────────
@@ -32,20 +62,20 @@ class CADMeta:
     """CAD図面から抽出したメタデータ。"""
     source_path: str
     layers: list[str] = field(default_factory=list)
-    # 全エンティティのワールド座標 bounding box (min/max)
     bbox_min: np.ndarray = field(default_factory=lambda: np.zeros(3))
     bbox_max: np.ndarray = field(default_factory=lambda: np.zeros(3))
-    unit: str = "mm"  # DXF $INSUNITS から推定
+    unit: str = "mm"
     entity_count: int = 0
+    # 判定結果: "2d" / "3d_polyface" / "floor_plan"
+    dxf_type: str = "2d"
 
     @property
     def dimensions(self) -> np.ndarray:
-        """X/Y/Z の寸法 [mm] を返す。"""
+        """X/Y/Z の寸法を返す（unit に応じた座標系）。"""
         return self.bbox_max - self.bbox_min
 
     @property
     def aspect_ratio(self) -> tuple[float, float, float]:
-        """X:Y:Z の比率（最大辺を1に正規化）。"""
         d = self.dimensions
         m = d.max() if d.max() > 0 else 1.0
         return tuple((d / m).tolist())
@@ -55,143 +85,337 @@ class CADMeta:
 class CADParseResult:
     """パース結果をまとめて保持する。"""
     meta: CADMeta
-    # 三面図: {"front": PIL.Image, "side": PIL.Image, "top": PIL.Image}
+    # Route A: 三面図画像
     views: dict[str, Image.Image] = field(default_factory=dict)
-    # 生のエンティティポイント群（点群プレビュー用）
+    # Route B: 直接抽出したメッシュ (trimesh.Trimesh)
+    mesh: Optional[object] = None
+    # 点群（共通）
     point_cloud: Optional[np.ndarray] = None
 
+    @property
+    def is_3d(self) -> bool:
+        """POLYFACEメッシュが直接抽出できた場合 True。"""
+        return self.mesh is not None
+
+    @property
+    def is_floor_plan(self) -> bool:
+        """建築平面図として判定された場合 True。"""
+        return self.meta.dxf_type == "floor_plan"
+
 
 # ─────────────────────────────────────────────
-# 内部ユーティリティ
+# ユーティリティ
 # ─────────────────────────────────────────────
 
-_INSUNITS_TO_MM = {
-    0: 1.0,    # 未定義→そのまま
-    1: 25.4,   # inch
-    2: 304.8,  # foot
-    4: 1.0,    # mm
-    5: 10.0,   # cm
-    6: 1000.0, # m
-}
-
-
-def _get_unit_scale(doc: ezdxf.document.Drawing) -> tuple[float, str]:
-    """$INSUNITS からスケール係数と単位名を返す。"""
+def _get_unit(doc: ezdxf.document.Drawing) -> tuple[float, str]:
     code = doc.header.get("$INSUNITS", 4)
     scale = _INSUNITS_TO_MM.get(code, 1.0)
-    name = {4: "mm", 5: "cm", 6: "m", 1: "inch", 2: "foot"}.get(code, "unit")
+    name  = _INSUNITS_NAME.get(code, "mm")
     return scale, name
 
 
-def _collect_points(msp, scale: float) -> np.ndarray:
-    """
-    modelspace の全エンティティから代表点を収集して (N,3) ndarray を返す。
-    LINE / LWPOLYLINE / CIRCLE / ARC / SPLINE を対象とする。
-    """
-    pts: list[np.ndarray] = []
+def _has_polyface(msp) -> bool:
+    """モデルスペースに POLYFACE MESH が存在するか判定。"""
+    for e in msp:
+        if e.dxftype() == "POLYLINE" and (e.dxf.get("flags", 0) & _POLYFACE_FLAG):
+            vlist = list(e.vertices)
+            if vlist:
+                # 頂点がZ値を持っていれば3Dメッシュと確定
+                try:
+                    z_vals = [v.dxf.location.z for v in vlist[:20]]
+                    if max(abs(z) for z in z_vals) > 1e-6:
+                        return True
+                except Exception:
+                    pass
+    return False
 
+
+def _is_floor_plan(msp, layer_cats: dict) -> bool:
+    """
+    建築平面図かどうかを判定する。
+    "wall" カテゴリのレイヤーが存在し、かつ Z=0 の2D図面であれば True。
+    """
+    has_wall = any(cat == "wall" for cat in layer_cats.values())
+    if not has_wall:
+        return False
+    # Z値がすべて0かチェック（サンプリング）
+    z_vals = []
+    count = 0
+    for e in msp:
+        if count > 50:
+            break
+        try:
+            if e.dxftype() == "LINE":
+                z_vals.append(abs(e.dxf.start.z) + abs(e.dxf.end.z))
+                count += 1
+        except Exception:
+            continue
+    if not z_vals:
+        return has_wall
+    return has_wall and max(z_vals) < 1.0  # Z=0の2D図面
+
+
+# ─────────────────────────────────────────────
+# Route B: POLYFACE直接抽出
+# ─────────────────────────────────────────────
+
+def _extract_polyface_mesh(msp, scale_to_m: float):
+    """
+    POLYFACE MESH を頂点・面リストに変換して trimesh.Trimesh を返す。
+
+    DXF POLYFACE の頂点フラグ:
+      bit7 (0x80) が立っている → face record (vtx0〜3 がインデックス定義)
+      立っていない           → 座標頂点
+      両方立っている (0xC0)  → car.dxf のように全頂点が面定義を兼ねる場合は
+                               グリッド面 (m×n) で面を生成する
+    """
+    import trimesh
+
+    all_verts: list[list[float]] = []
+    all_faces: list[list[int]]   = []
+
+    for poly in msp:
+        if poly.dxftype() != "POLYLINE":
+            continue
+        if not (poly.dxf.get("flags", 0) & _POLYFACE_FLAG):
+            continue
+
+        vlist = list(poly.vertices)
+        if not vlist:
+            continue
+
+        offset = len(all_verts)
+
+        # ── ① 通常 POLYFACE: geo頂点 と face record を分離 ──
+        geo_verts: list[list[float]] = []
+        face_recs:  list[list[int]]  = []
+        for v in vlist:
+            vf = v.dxf.get("flags", 0)
+            if vf & 0x80:
+                fi = []
+                for attr in ("vtx0", "vtx1", "vtx2", "vtx3"):
+                    idx = v.dxf.get(attr, 0)
+                    if idx != 0:
+                        fi.append(abs(idx) - 1)
+                face_recs.append(fi)
+            else:
+                loc = v.dxf.location
+                geo_verts.append([loc.x, loc.y, loc.z])
+
+        # ── ② 全頂点が 0xC0 (geo+face 兼用) → m×n グリッドで面生成 ──
+        if not geo_verts:
+            geo_verts = [
+                [v.dxf.location.x, v.dxf.location.y, v.dxf.location.z]
+                for v in vlist
+            ]
+            m   = poly.dxf.get("m_count", 0)
+            n_c = poly.dxf.get("n_count", 0)
+            total = len(geo_verts)
+            if m > 0 and n_c > 0 and m * n_c <= total:
+                for i in range(m - 1):
+                    for j in range(n_c - 1):
+                        a = offset + i * n_c + j
+                        b = offset + i * n_c + (j + 1)
+                        c = offset + (i + 1) * n_c + (j + 1)
+                        d = offset + (i + 1) * n_c + j
+                        if max(a, b, c, d) < offset + total:
+                            all_faces.append([a, b, c])
+                            all_faces.append([a, c, d])
+
+        all_verts.extend(geo_verts)
+
+        # ── ③ face records から三角形・四角形を追加 ──
+        for fi in face_recs:
+            fi_off = [i + offset for i in fi]
+            if len(fi_off) == 3:
+                all_faces.append(fi_off)
+            elif len(fi_off) >= 4:
+                all_faces.append([fi_off[0], fi_off[1], fi_off[2]])
+                all_faces.append([fi_off[0], fi_off[2], fi_off[3]])
+
+    if not all_verts or not all_faces:
+        return None
+
+    verts = np.array(all_verts, dtype=np.float64) * scale_to_m
+    faces = np.array(all_faces, dtype=np.int64)
+
+    # インデックス範囲チェック
+    valid = (faces.max(axis=1) < len(verts)) & (faces.min(axis=1) >= 0)
+    faces = faces[valid]
+    if len(faces) == 0:
+        return None
+
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces)
+    mesh.merge_vertices()
+    mesh.fix_normals()
+
+    logger.info(
+        f"POLYFACE抽出完了: verts={len(mesh.vertices)}, faces={len(mesh.faces)}  "
+        f"bbox X={verts[:,0].min():.3f}~{verts[:,0].max():.3f}m  "
+        f"Y={verts[:,1].min():.3f}~{verts[:,1].max():.3f}m  "
+        f"Z={verts[:,2].min():.3f}~{verts[:,2].max():.3f}m"
+    )
+    return mesh
+
+
+# ─────────────────────────────────────────────
+# Route A: 2D図面用 点群・セグメント収集
+# ─────────────────────────────────────────────
+
+def _collect_points(msp, scale: float) -> np.ndarray:
+    pts: list[np.ndarray] = []
     for e in msp:
         dxftype = e.dxftype()
         try:
             if dxftype == "LINE":
-                pts.append(np.array([e.dxf.start.x, e.dxf.start.y, e.dxf.start.z]))
-                pts.append(np.array([e.dxf.end.x,   e.dxf.end.y,   e.dxf.end.z]))
-
+                pts += [np.array([e.dxf.start.x, e.dxf.start.y, e.dxf.start.z]),
+                        np.array([e.dxf.end.x,   e.dxf.end.y,   e.dxf.end.z])]
             elif dxftype == "LWPOLYLINE":
                 for x, y, *_ in e.get_points():
                     pts.append(np.array([x, y, 0.0]))
-
             elif dxftype in ("CIRCLE", "ARC"):
                 cx, cy, cz = e.dxf.center.x, e.dxf.center.y, e.dxf.center.z
                 r = e.dxf.radius
-                # 8点で近似
                 for a in np.linspace(0, 2 * np.pi, 8, endpoint=False):
                     pts.append(np.array([cx + r * np.cos(a), cy + r * np.sin(a), cz]))
-
             elif dxftype == "SPLINE":
                 for p in e.control_points:
                     pts.append(np.array([p.x, p.y, p.z]))
-
+            elif dxftype == "POLYLINE":
+                for v in e.vertices:
+                    loc = v.dxf.location
+                    pts.append(np.array([loc.x, loc.y, loc.z]))
         except Exception:
-            # 読み取れないエンティティはスキップ
             continue
-
     if not pts:
         return np.zeros((1, 3))
-
-    arr = np.array(pts, dtype=np.float64) * scale
-    return arr
+    return np.array(pts, dtype=np.float64) * scale
 
 
-def _collect_lines(msp, scale: float) -> list[tuple[np.ndarray, np.ndarray]]:
-    """LINE エンティティのリストを [(start, end), ...] で返す。"""
-    lines = []
+def _collect_segments(msp, scale: float) -> list[tuple[np.ndarray, np.ndarray]]:
+    segs: list[tuple[np.ndarray, np.ndarray]] = []
     for e in msp:
-        if e.dxftype() == "LINE":
-            try:
+        dxftype = e.dxftype()
+        try:
+            if dxftype == "LINE":
                 s = np.array([e.dxf.start.x, e.dxf.start.y, e.dxf.start.z]) * scale
                 t = np.array([e.dxf.end.x,   e.dxf.end.y,   e.dxf.end.z])   * scale
-                lines.append((s, t))
-            except Exception:
-                continue
-        elif e.dxftype() == "LWPOLYLINE":
-            try:
-                verts = [(x * scale, y * scale) for x, y, *_ in e.get_points()]
-                for i in range(len(verts) - 1):
-                    s = np.array([verts[i][0],   verts[i][1],   0.0])
-                    t = np.array([verts[i+1][0], verts[i+1][1], 0.0])
-                    lines.append((s, t))
-            except Exception:
-                continue
-    return lines
+                segs.append((s, t))
 
+            elif dxftype == "LWPOLYLINE":
+                verts = [(x * scale, y * scale) for x, y, *_ in e.get_points()]
+                if getattr(e, "is_closed", False) and len(verts) > 1:
+                    verts = verts + [verts[0]]
+                for i in range(len(verts) - 1):
+                    segs.append((np.array([verts[i][0],   verts[i][1],   0.0]),
+                                 np.array([verts[i+1][0], verts[i+1][1], 0.0])))
+
+            elif dxftype == "POLYLINE":
+                # POLYFACEは三面図では輪郭エッジのみ抽出
+                flags = e.dxf.get("flags", 0)
+                if flags & _POLYFACE_FLAG:
+                    # シルエット用: XY投影した全エッジを追加
+                    vlist = list(e.vertices)
+                    pts_p = [np.array([v.dxf.location.x, v.dxf.location.y, v.dxf.location.z]) * scale
+                             for v in vlist]
+                    m   = e.dxf.get("m_count", 0)
+                    n_c = e.dxf.get("n_count", 0)
+                    if m > 0 and n_c > 0 and m * n_c <= len(pts_p):
+                        # グリッドエッジのみ（全面を描くと塗りつぶしになる）
+                        for i in range(0, m, max(1, m // 20)):
+                            for j in range(n_c - 1):
+                                segs.append((pts_p[i*n_c+j], pts_p[i*n_c+j+1]))
+                        for j in range(0, n_c, max(1, n_c // 20)):
+                            for i in range(m - 1):
+                                segs.append((pts_p[i*n_c+j], pts_p[(i+1)*n_c+j]))
+                else:
+                    pts_p = [np.array([v.dxf.location.x, v.dxf.location.y, v.dxf.location.z]) * scale
+                             for v in e.vertices]
+                    for i in range(len(pts_p) - 1):
+                        segs.append((pts_p[i], pts_p[i+1]))
+
+            elif dxftype == "CIRCLE":
+                cx, cy, cz = e.dxf.center.x*scale, e.dxf.center.y*scale, e.dxf.center.z*scale
+                r = e.dxf.radius * scale
+                n = min(max(32, int(2*np.pi*r / max(scale*10, 1e-9))), 128)
+                pts_c = [np.array([cx + r*np.cos(a), cy + r*np.sin(a), cz])
+                         for a in np.linspace(0, 2*np.pi, n, endpoint=False)]
+                for i in range(len(pts_c)):
+                    segs.append((pts_c[i], pts_c[(i+1) % len(pts_c)]))
+
+            elif dxftype == "ARC":
+                cx, cy, cz = e.dxf.center.x*scale, e.dxf.center.y*scale, e.dxf.center.z*scale
+                r = e.dxf.radius * scale
+                a0, a1 = np.radians(e.dxf.start_angle), np.radians(e.dxf.end_angle)
+                if a1 <= a0:
+                    a1 += 2*np.pi
+                pts_a = [np.array([cx + r*np.cos(a), cy + r*np.sin(a), cz])
+                         for a in np.linspace(a0, a1, 32)]
+                for i in range(len(pts_a) - 1):
+                    segs.append((pts_a[i], pts_a[i+1]))
+
+            elif dxftype == "SPLINE":
+                try:
+                    pts_s = [np.array([p.x, p.y, p.z]) * scale for p in e.flattening(0.01)]
+                except Exception:
+                    pts_s = [np.array([p.x, p.y, p.z]) * scale for p in e.control_points]
+                for i in range(len(pts_s) - 1):
+                    segs.append((pts_s[i], pts_s[i+1]))
+
+            elif dxftype == "ELLIPSE":
+                pts_e = [np.array([p.x, p.y, p.z]) * scale for p in e.flattening(0.01)]
+                for i in range(len(pts_e) - 1):
+                    segs.append((pts_e[i], pts_e[i+1]))
+
+        except Exception:
+            continue
+    return segs
+
+
+# ─────────────────────────────────────────────
+# レンダリング
+# ─────────────────────────────────────────────
 
 def _render_view(
-    lines: list[tuple[np.ndarray, np.ndarray]],
+    segs: list[tuple[np.ndarray, np.ndarray]],
     pts: np.ndarray,
     axis_h: int,
     axis_v: int,
-    title: str,
     image_size: int,
-    margin: float = 0.05,
+    margin: float = 0.08,
 ) -> Image.Image:
-    """
-    lines を指定軸に投影して matplotlib でレンダリングし PIL.Image を返す。
-
-    axis_h: 水平方向として使う座標軸インデックス (0=X, 1=Y, 2=Z)
-    axis_v: 垂直方向として使う座標軸インデックス
-    """
-    fig, ax = plt.subplots(figsize=(4, 4), dpi=image_size // 4)
+    """セグメントを指定軸に投影して PNG 画像を返す（Zero123++入力用）。"""
+    dpi = 128
+    fig, ax = plt.subplots(figsize=(image_size/dpi, image_size/dpi), dpi=dpi)
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_facecolor("white")
     fig.patch.set_facecolor("white")
-
-    segs = []
-    for s, t in lines:
-        segs.append([(s[axis_h], s[axis_v]), (t[axis_h], t[axis_v])])
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
     if segs:
-        lc = LineCollection(segs, linewidths=0.8, colors="black")
+        lc = LineCollection(
+            [[(s[axis_h], s[axis_v]), (t[axis_h], t[axis_v])] for s, t in segs],
+            linewidths=3.0, colors="black", capstyle="round", joinstyle="round",
+        )
         ax.add_collection(lc)
 
-    # パディング付きで表示範囲を決定
     if pts.shape[0] > 1:
         xmin, xmax = pts[:, axis_h].min(), pts[:, axis_h].max()
         ymin, ymax = pts[:, axis_v].min(), pts[:, axis_v].max()
-        xpad = max((xmax - xmin) * margin, 1e-3)
-        ypad = max((ymax - ymin) * margin, 1e-3)
+        xpad = max(xmax - xmin, 1e-3) * margin
+        ypad = max(ymax - ymin, 1e-3) * margin
         ax.set_xlim(xmin - xpad, xmax + xpad)
         ax.set_ylim(ymin - ypad, ymax + ypad)
 
-    ax.set_title(title, fontsize=8, pad=2)
-
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=image_size // 4)
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches=None, pad_inches=0)
     plt.close(fig)
     buf.seek(0)
-    img = Image.open(buf).convert("RGBA")
-    return img.resize((image_size, image_size), Image.LANCZOS)
+
+    img = Image.open(buf).convert("L").resize((image_size, image_size), Image.LANCZOS)
+    img = img.point(lambda x: 0 if x < 200 else 255, "L")
+    return img.convert("RGBA")
 
 
 # ─────────────────────────────────────────────
@@ -203,19 +427,15 @@ def parse_dxf(
     image_size: int = 512,
 ) -> CADParseResult:
     """
-    DXF ファイルを読み込み CADParseResult を返す。
+    DXF を読み込んで CADParseResult を返す。
 
-    Parameters
-    ----------
-    path       : DXF ファイルパス
-    image_size : 出力画像の一辺ピクセル数（Zero123++ 推奨: 512）
+    POLYFACE MESH が検出された場合 (result.is_3d == True):
+        result.mesh に trimesh.Trimesh が入る（単位: m）
+        result.views には三面図のシルエット画像も入る（確認用）
 
-    Returns
-    -------
-    CADParseResult
-        .meta       - メタデータ
-        .views      - {"front", "side", "top"} の三面図 PIL.Image
-        .point_cloud - (N,3) ndarray [mm]
+    2D 図面の場合 (result.is_3d == False):
+        result.views に三面図が入る → Zero123++ 推論へ渡す
+        result.mesh は None
     """
     path = Path(path)
     if not path.exists():
@@ -223,15 +443,43 @@ def parse_dxf(
 
     doc = ezdxf.readfile(str(path))
     msp = doc.modelspace()
-
-    scale, unit = _get_unit_scale(doc)
-    pts = _collect_points(msp, scale)
-    lines = _collect_lines(msp, scale)
-
-    bbox_min = pts.min(axis=0)
-    bbox_max = pts.max(axis=0)
-
+    scale, unit = _get_unit(doc)
     layers = [layer.dxf.name for layer in doc.layers]
+    entity_count = len(list(msp))
+
+    # ── 3D POLYFACE 検出 ──────────────────────
+    from core.floor_plan_extruder import _classify_layers
+    layer_cats = _classify_layers(doc)
+
+    mesh = None
+    dxf_type = "2d"
+    if _has_polyface(msp):
+        # mm → m 変換して抽出
+        _to_m = {"mm": 1e-3, "cm": 1e-2, "m": 1.0, "inch": 25.4e-3, "foot": 0.3048}
+        scale_to_m = _to_m.get(unit, 1e-3)
+        mesh = _extract_polyface_mesh(msp, scale_to_m)
+        if mesh is not None:
+            dxf_type = "3d_polyface"
+            logger.info("Route B: 3D POLYFACEメッシュとして処理します（推論スキップ可）")
+    elif _is_floor_plan(msp, layer_cats):
+        dxf_type = "floor_plan"
+        logger.info("Route C: 建築平面図として処理します（押し出し変換）")
+
+    # ── 点群・segs 収集（三面図生成用・共通） ──
+    pts  = _collect_points(msp, scale)
+    segs = _collect_segments(msp, scale)
+
+    # bbox は POLYFACE の場合はメッシュから取る
+    if mesh is not None:
+        verts = np.array(mesh.vertices)
+        # m → unit に戻して meta に持つ
+        _to_mm = {"mm": 1.0, "cm": 0.1, "m": 1e-3, "inch": 1/25.4, "foot": 1/304.8}
+        inv = 1.0 / _to_mm.get(unit, 1.0)
+        bbox_min = verts.min(axis=0) * inv
+        bbox_max = verts.max(axis=0) * inv
+    else:
+        bbox_min = pts.min(axis=0)
+        bbox_max = pts.max(axis=0)
 
     meta = CADMeta(
         source_path=str(path),
@@ -239,23 +487,20 @@ def parse_dxf(
         bbox_min=bbox_min,
         bbox_max=bbox_max,
         unit=unit,
-        entity_count=len(list(msp)),
+        entity_count=entity_count,
+        dxf_type=dxf_type,
     )
 
     views = {
-        # 正面図: X(水平) × Z(垂直)
-        "front": _render_view(lines, pts, axis_h=0, axis_v=2, title="Front (XZ)", image_size=image_size),
-        # 側面図: Y(水平) × Z(垂直)
-        "side":  _render_view(lines, pts, axis_h=1, axis_v=2, title="Side (YZ)",  image_size=image_size),
-        # 上面図: X(水平) × Y(垂直)
-        "top":   _render_view(lines, pts, axis_h=0, axis_v=1, title="Top (XY)",   image_size=image_size),
+        "front": _render_view(segs, pts, axis_h=0, axis_v=2, image_size=image_size),
+        "side":  _render_view(segs, pts, axis_h=1, axis_v=2, image_size=image_size),
+        "top":   _render_view(segs, pts, axis_h=0, axis_v=1, image_size=image_size),
     }
 
-    return CADParseResult(meta=meta, views=views, point_cloud=pts)
+    return CADParseResult(meta=meta, views=views, mesh=mesh, point_cloud=pts)
 
 
 def save_views(result: CADParseResult, output_dir: str | Path) -> dict[str, Path]:
-    """三面図を PNG として保存し、保存パスの dict を返す。"""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     saved = {}
