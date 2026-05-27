@@ -171,6 +171,67 @@ class Zero123PlusPlusInferencer:
                 views.append(grid.crop(box))
         return views
 
+    # ── 押し出しメッシュからのエンドツーエンドパイプライン ────────
+
+    def generate_from_floor_plan_mesh(
+        self,
+        mesh,
+        output_path: str | Path = "output.glb",
+        image_size: int = 512,
+        seed: int = 42,
+        render_output_dir=None,
+    ) -> Path:
+        """
+        押し出し3DメッシュからZero123++推論→メッシュ化を一括実行する。
+
+        Route C（建築平面図）専用のエンドツーエンドパイプライン:
+          trimesh.Trimesh
+            → mesh_renderer でシルエット画像生成
+            → Zero123++ で多視点画像生成
+            → Depth-Anything-V2 で深度推定
+            → TSDF Fusion でメッシュ化
+
+        Parameters
+        ----------
+        mesh            : trimesh.Trimesh（押し出し済み、単位 m）
+        output_path     : 出力ファイルパス（.glb / .obj）
+        image_size      : レンダリング・推論の画像サイズ（デフォルト 512）
+        seed            : Zero123++ の乱数シード
+        render_output_dir: レンダリング画像の保存先（デバッグ用、省略可）
+
+        Returns
+        -------
+        Path  生成したメッシュファイルのパス
+        """
+        from core.mesh_renderer import render_mesh_for_zero123
+
+        logger.info("=== Route C: 押し出しメッシュ → Zero123++ パイプライン ===")
+
+        # ① 押し出しメッシュをレンダリング
+        logger.info("Step 1: メッシュをシルエット画像にレンダリング中...")
+        input_image = render_mesh_for_zero123(
+            mesh,
+            image_size=image_size,
+            output_dir=render_output_dir,
+        )
+        logger.info(f"  シルエット画像生成完了: {input_image.size}")
+
+        # ② Zero123++ で多視点生成
+        logger.info("Step 2: Zero123++ で多視点生成中...")
+        views = self.generate_views(input_image, seed=seed)
+        logger.info(f"  {len(views)}視点生成完了")
+
+        # 生成ビューを保存（デバッグ用）
+        if render_output_dir is not None:
+            gen_dir = Path(render_output_dir) / "generated"
+            gen_dir.mkdir(parents=True, exist_ok=True)
+            for i, v in enumerate(views):
+                v.save(gen_dir / f"view_{i:02d}.png")
+
+        # ③ メッシュ生成
+        logger.info("Step 3: TSDF Fusion でメッシュ化中...")
+        return self.generate_mesh(views, output_path=output_path)
+
     # ── メッシュ生成 ─────────────────────────────────
 
     def generate_mesh(
@@ -199,17 +260,57 @@ class Zero123PlusPlusInferencer:
         else:
             raise NotImplementedError(f"Mesh method '{method}' is not implemented yet.")
 
+    # ── Depth-Anything-V2 深度推定 ───────────────────
+
+    def _estimate_depth(self, image: Image.Image) -> np.ndarray:
+        """
+        Depth-Anything-V2 で単眼深度推定を行い、正規化された深度マップを返す。
+
+        Returns
+        -------
+        np.ndarray shape=(H,W) dtype=float32  値域 [0.2, 2.0] (メートル相当)
+        """
+        try:
+            from transformers import pipeline as hf_pipeline
+        except ImportError:
+            logger.warning("transformers 未インストール → 仮深度にフォールバック")
+            arr = np.array(image.convert("RGB"))
+            return np.full((arr.shape[0], arr.shape[1]), 1.0, dtype=np.float32)
+
+        # モデルの遅延ロード（初回のみDL ~400MB）
+        if not hasattr(self, "_depth_pipe") or self._depth_pipe is None:
+            logger.info("Depth-Anything-V2 をロード中 (初回のみDL ~400MB)...")
+            self._depth_pipe = hf_pipeline(
+                "depth-estimation",
+                model="depth-anything/Depth-Anything-V2-Small-hf",
+                device=0 if str(self.device) == "cuda" else -1,
+            )
+            logger.info("Depth-Anything-V2 ロード完了")
+
+        # 推論
+        result = self._depth_pipe(image.convert("RGB"))
+        depth_pil = result["depth"]                          # PIL.Image (grayscale)
+        depth_arr = np.array(depth_pil, dtype=np.float32)   # shape (H, W)
+
+        # 正規化: [0,255] → [0.2, 2.0] メートル（線形スケール）
+        d_min, d_max = depth_arr.min(), depth_arr.max()
+        if d_max - d_min < 1e-6:
+            return np.full_like(depth_arr, 1.0)
+        depth_norm = (depth_arr - d_min) / (d_max - d_min)  # [0, 1]
+        depth_m = 0.2 + depth_norm * 1.8                    # [0.2, 2.0] m
+
+        # Depth-Anything は近いほど大きい値 → TSDF 用に反転
+        depth_m = 2.2 - depth_m                             # 反転して遠いほど大きく
+
+        return depth_m.astype(np.float32)
+
     def _mesh_via_tsdf(
         self,
         views: list[Image.Image],
         output_path: Path,
     ) -> Path:
         """
-        Open3D の TSDF Fusion で多視点画像 → メッシュ化。
-
-        NOTE: 本実装は簡易版です。
-              精度を高めるには DepthEstimation（DPT/Depth-Anything）で
-              深度マップを推定してから TSDF に入力することを推奨します。
+        Depth-Anything-V2 で深度推定 → Open3D TSDF Fusion でメッシュ化。
         """
         try:
             import open3d as o3d
@@ -221,11 +322,9 @@ class Zero123PlusPlusInferencer:
         except ImportError:
             raise RuntimeError("trimesh がインストールされていません: pip install trimesh")
 
-        logger.info("Running TSDF Fusion ...")
+        logger.info("Running TSDF Fusion with Depth-Anything-V2 ...")
 
-        # ── ① 実際の画像サイズから Intrinsic を動的に生成 ──
-        # Zero123++ のグリッド分割結果は環境によってサイズが変わるため
-        # 最初の view から実サイズを取得して合わせる
+        # ── ① 画像サイズから Intrinsic を動的に生成 ──
         first_rgb = np.array(views[0].convert("RGB"), dtype=np.uint8)
         img_h, img_w = first_rgb.shape[:2]
         logger.info(f"View image size: {img_w}×{img_h}")
@@ -236,21 +335,28 @@ class Zero123PlusPlusInferencer:
             color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
         )
 
-        # 画像サイズから焦点距離・主点を算出（標準的な 60° FoV 相当）
         fx = fy = max(img_w, img_h) * 0.8
         cx, cy = img_w / 2.0, img_h / 2.0
         intrinsic = o3d.camera.PinholeCameraIntrinsic(
             width=img_w, height=img_h,
-            fx=fx, fy=fy,
-            cx=cx, cy=cy,
+            fx=fx, fy=fy, cx=cx, cy=cy,
         )
-        logger.info(f"Intrinsic: w={img_w}, h={img_h}, fx={fx:.1f}, cx={cx:.1f}, cy={cy:.1f}")
+        logger.info(f"Intrinsic: w={img_w}, h={img_h}, fx={fx:.1f}")
 
         for i, view in enumerate(views):
             rgb = np.array(view.convert("RGB"), dtype=np.uint8)
-            # 仮深度（一定値）: 実際は推定深度マップに差し替える
-            depth_val = 1.0
-            depth = np.full((rgb.shape[0], rgb.shape[1]), depth_val, dtype=np.float32)
+
+            # ── ② Depth-Anything-V2 で深度推定 ──────────
+            view_resized = view.resize((img_w, img_h))
+            depth = self._estimate_depth(view_resized)      # shape (H, W) float32
+
+            # 画像サイズと深度マップのサイズを合わせる
+            if depth.shape != (img_h, img_w):
+                from PIL import Image as PILImage
+                depth_pil = PILImage.fromarray(depth).resize(
+                    (img_w, img_h), PILImage.BILINEAR
+                )
+                depth = np.array(depth_pil, dtype=np.float32)
 
             rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
                 o3d.geometry.Image(rgb),
@@ -260,16 +366,15 @@ class Zero123PlusPlusInferencer:
                 convert_rgb_to_intensity=False,
             )
 
-            # 仮カメラ姿勢（方位角 60° 刻みの 6 視点を想定）
             angle = i * (2 * np.pi / len(views))
-            extrinsic = _make_orbit_extrinsic(angle=angle, elevation=np.radians(30), radius=1.5)
-
+            extrinsic = _make_orbit_extrinsic(
+                angle=angle, elevation=np.radians(30), radius=1.5
+            )
             volume.integrate(rgbd, intrinsic, extrinsic)
 
         mesh_o3d = volume.extract_triangle_mesh()
         mesh_o3d.compute_vertex_normals()
 
-        # ── ② trimesh 経由で glTF/OBJ エクスポート ──
         verts = np.asarray(mesh_o3d.vertices)
         faces = np.asarray(mesh_o3d.triangles)
         colors = (np.asarray(mesh_o3d.vertex_colors) * 255).astype(np.uint8)

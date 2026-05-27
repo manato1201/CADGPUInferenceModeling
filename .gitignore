@@ -44,3 +44,6 @@ desktop.ini
 .idea/
 *.suo
 *.user
+
+# ── 外部リポジトリ（サブモジュールではなく単純clone）──
+TripoSR/
