@@ -378,11 +378,12 @@
 <header class="hero">
   <div class="wrap">
     <div class="hero-tag">Portfolio / Tool Engineer</div>
-    <h1>CAD<span>GPU</span>InferenceModeling</h1>
+    <h1>CADGPU<span>I</span>nference<br>Modeling</h1>
     <p class="hero-sub">
       CAD図面（DXF）とゲーム用3Dアセット（OBJ/GLB）を双方向に自動変換する
       GPU推論パイプライン。建築平面図の押し出し変換からTripoSR推論、
       Zバッファ隠線判定DXF出力まで一貫して処理する。
+      <br><br>ゲーム制作現場でのCAD→3Dアセット変換コストを自動化することを目的に開発。
     </p>
     <div class="hero-meta">
       <span class="chip hot">Python 3.12</span>
@@ -391,6 +392,40 @@
       <span class="chip">ezdxf / trimesh / shapely</span>
       <span class="chip">TripoSR / Zero123++</span>
       <span class="chip">numpy Zバッファ</span>
+    </div>
+    <div style="margin-top:28px;display:flex;gap:12px;flex-wrap:wrap;">
+      <a href="https://github.com/manato1201/CADGPUInferenceModeling"
+         target="_blank" rel="noopener"
+         style="display:inline-flex;align-items:center;gap:8px;
+                font-family:'Space Mono',monospace;font-size:12px;
+                color:var(--accent);border:1px solid var(--accent);
+                padding:8px 18px;border-radius:3px;text-decoration:none;
+                transition:background .2s;"
+         onmouseover="this.style.background='rgba(0,229,255,.08)'"
+         onmouseout="this.style.background='transparent'">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57
+                   0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695
+                   -.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99
+                   .105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225
+                   -.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405
+                   c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225
+                   0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3
+                   0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        GitHub リポジトリ
+      </a>
+      <a href="https://github.com/manato1201/CADGPUInferenceModeling/blob/main/README.md"
+         target="_blank" rel="noopener"
+         style="display:inline-flex;align-items:center;gap:8px;
+                font-family:'Space Mono',monospace;font-size:12px;
+                color:var(--muted);border:1px solid var(--border);
+                padding:8px 18px;border-radius:3px;text-decoration:none;
+                transition:all .2s;"
+         onmouseover="this.style.color='var(--text)';this.style.borderColor='var(--muted)'"
+         onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
+        README.md
+      </a>
     </div>
   </div>
 </header>
@@ -516,37 +551,137 @@
     <p>
       3DモデルをCAD図面に変換する際、「どのエッジが手前に見えるか」を正確に判定することが課題だった。
       従来の法線ベース手法では曲面・自己遮蔽を正確に扱えず、99.9%が隠線に誤分類されていた。
-    </p>
-    <p>
-      GPU不使用・numpy のみでZバッファラスタライザを自前実装した。
-      バリセントリック座標法で三角形を512×512の深度マップに正確に描画し、
-      各エッジを5点サンプリングして深度マップと比較することで、
-      遮蔽関係を画素単位で判定する。
+      GPU不使用・numpy のみでバリセントリック座標法のZバッファラスタライザを自前実装することで解決した。
     </p>
 
-    <div class="zbuf-demo">
-      <div class="zbuf-block">
-        <div style="color:var(--muted);margin-bottom:12px;">INPUT</div>
-        <div style="color:var(--text);font-size:13px;">3Dメッシュ<br>全三角形</div>
-        <div style="color:var(--muted);font-size:10px;margin-top:8px;">car.dxf<br>14,234 faces</div>
+    <!-- Zバッファ可視化デモ（リデザイン） -->
+    <div style="margin:32px 0;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+
+      <!-- ステップヘッダー -->
+      <div style="display:grid;grid-template-columns:1fr 32px 1fr 32px 1fr;background:#0d1117;border-bottom:1px solid var(--border);">
+        <div style="padding:12px 20px;font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.12em;color:var(--muted);">STEP 1 — INPUT</div>
+        <div></div>
+        <div style="padding:12px 20px;font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.12em;color:var(--accent);">STEP 2 — Z BUFFER</div>
+        <div></div>
+        <div style="padding:12px 20px;font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.12em;color:var(--success);">STEP 3 — OUTPUT</div>
       </div>
-      <div class="zbuf-arrow">→</div>
-      <div class="zbuf-block">
-        <div style="color:var(--accent);margin-bottom:12px;font-weight:700;">Zバッファ</div>
-        <div style="width:80px;height:80px;margin:0 auto;background:linear-gradient(135deg,#00e5ff22,#7c3aed44);border:1px solid var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px;">512×512<br>depth map</div>
-        <div style="color:var(--muted);font-size:10px;margin-top:8px;">バリセントリック<br>座標補間</div>
-      </div>
-      <div class="zbuf-arrow">→</div>
-      <div class="zbuf-block">
-        <div style="color:var(--muted);margin-bottom:12px;">OUTPUT</div>
-        <div class="zbuf-bar-wrap">
-          <div class="zbuf-bar" style="background:var(--accent);width:78%;"></div>
-          <div class="zbuf-label">VISIBLE 78%</div>
-          <div class="zbuf-bar" style="background:var(--border);width:22%;margin-top:6px;"></div>
-          <div class="zbuf-label">HIDDEN 21%</div>
+
+      <!-- メインコンテンツ -->
+      <div style="display:grid;grid-template-columns:1fr 32px 1fr 32px 1fr;align-items:center;padding:28px 0;">
+
+        <!-- STEP1: メッシュ情報 -->
+        <div style="padding:0 24px;text-align:center;">
+          <div style="font-family:'Space Mono',monospace;font-size:28px;font-weight:700;color:var(--text);line-height:1;">14,234</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);margin-top:4px;">FACES</div>
+          <div style="margin:16px auto;width:72px;height:72px;position:relative;">
+            <svg viewBox="0 0 72 72" style="width:100%;height:100%;opacity:.7;">
+              <polygon points="36,8 64,56 8,56" fill="none" stroke="#00e5ff" stroke-width="1.5"/>
+              <polygon points="36,20 56,56 16,56" fill="none" stroke="#7c3aed" stroke-width="1"/>
+              <polygon points="20,14 60,30 10,50" fill="none" stroke="#64748b" stroke-width=".8"/>
+            </svg>
+          </div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">car.dxf<br>8,241 verts</div>
+        </div>
+
+        <!-- 矢印1 -->
+        <div style="text-align:center;color:var(--muted);font-size:20px;">→</div>
+
+        <!-- STEP2: Zバッファ -->
+        <div style="padding:0 20px;text-align:center;">
+          <!-- 擬似深度マップ -->
+          <div style="width:96px;height:96px;margin:0 auto;border-radius:4px;border:1px solid var(--accent);overflow:hidden;position:relative;">
+            <canvas id="zbufCanvas" width="96" height="96"></canvas>
+          </div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--accent);margin-top:10px;">512×512 px</div>
+          <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);margin-top:4px;">バリセントリック座標補間<br>float32 深度値</div>
+        </div>
+
+        <!-- 矢印2 -->
+        <div style="text-align:center;color:var(--muted);font-size:20px;">→</div>
+
+        <!-- STEP3: 判定結果 -->
+        <div style="padding:0 24px;">
+          <!-- VISIBLE バー -->
+          <div style="margin-bottom:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+              <span style="font-family:'Space Mono',monospace;font-size:11px;color:var(--success);">VISIBLE</span>
+              <span style="font-family:'Space Mono',monospace;font-size:20px;font-weight:700;color:var(--success);">78%</span>
+            </div>
+            <div style="height:10px;background:var(--border);border-radius:5px;overflow:hidden;">
+              <div style="height:100%;width:78%;background:linear-gradient(90deg,var(--success),#86efac);border-radius:5px;
+                          animation:barGrow .8s ease forwards;transform-origin:left;"></div>
+            </div>
+            <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);margin-top:4px;">53,482 エッジ</div>
+          </div>
+          <!-- HIDDEN バー -->
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+              <span style="font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);">HIDDEN</span>
+              <span style="font-family:'Space Mono',monospace;font-size:20px;font-weight:700;color:var(--muted);">21%</span>
+            </div>
+            <div style="height:10px;background:var(--border);border-radius:5px;overflow:hidden;">
+              <div style="height:100%;width:21%;background:var(--border);border-radius:5px;border:1px solid #2a3040;"></div>
+            </div>
+            <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);margin-top:4px;">14,116 エッジ</div>
+          </div>
+
+          <!-- 旧手法比較 -->
+          <div style="margin-top:16px;padding:10px 12px;background:#0d1117;border-radius:4px;border-left:2px solid var(--accent2);">
+            <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);">旧手法（法線ベース）</div>
+            <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);margin-top:4px;">
+              VISIBLE <span style="color:#ef4444;">0.1%</span> → <span style="color:var(--success);">78.0%</span> に改善
+            </div>
+          </div>
         </div>
       </div>
+
+      <!-- エッジ判定の詳細フロー -->
+      <div style="border-top:1px solid var(--border);padding:20px 24px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">判定フロー:</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;padding:4px 10px;border:1px solid var(--border);border-radius:3px;color:var(--text);">エッジを5点サンプリング</div>
+        <div style="color:var(--muted);">→</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;padding:4px 10px;border:1px solid var(--accent);border-radius:3px;color:var(--accent);">各点の深度 vs Zバッファ</div>
+        <div style="color:var(--muted);">→</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;padding:4px 10px;border:1px solid var(--border);border-radius:3px;color:var(--text);">過半数が手前</div>
+        <div style="color:var(--muted);">→</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;padding:4px 10px;background:rgba(34,197,94,.1);border:1px solid var(--success);border-radius:3px;color:var(--success);">VISIBLE</div>
+      </div>
     </div>
+
+    <style>
+    @keyframes barGrow {
+      from { width: 0; }
+      to   { width: 78%; }
+    }
+    </style>
+    <script>
+    // 擬似深度マップをCanvasで描画
+    (function() {
+      const c = document.getElementById('zbufCanvas');
+      if (!c) return;
+      const ctx = c.getContext('2d');
+      const w = c.width, h = c.height;
+      const img = ctx.createImageData(w, h);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const nx = x/w, ny = y/h;
+          // 車のシルエット風の深度マップを近似
+          const cx = nx - 0.5, cy = ny - 0.5;
+          const dist = Math.sqrt(cx*cx*2.5 + cy*cy*5);
+          const car = dist < 0.4 ? 1.0 - dist/0.4 : 0;
+          const noise = (Math.sin(x*0.3)*Math.cos(y*0.4) + 1) * 0.05;
+          const v = Math.min(255, Math.floor((car + noise) * 255));
+          const idx = (y*w + x) * 4;
+          // 深度マップ: 手前=明るい青緑、奥=暗い
+          img.data[idx]   = Math.floor(v * 0.0);
+          img.data[idx+1] = Math.floor(v * 0.6);
+          img.data[idx+2] = Math.floor(v * 0.7);
+          img.data[idx+3] = v > 10 ? 255 : 40;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    })();
+    </script>
 
 <pre><code><span class="code-comment"># バリセントリック座標法でZバッファに三角形を描画</span>
 <span class="code-keyword">def</span> _build_zbuffer(verts, faces, ax_h, ax_v, ax_d, size=512):
@@ -727,8 +862,29 @@ python cli.py export model.obj</code></pre>
 <footer>
   <div class="wrap" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;width:100%;">
     <div class="copy">CADGPUInferenceModeling — 松浦真聖 </div>
-    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);">
-      Python · CUDA · DXF · GPU Inference
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+      <a href="https://github.com/manato1201/CADGPUInferenceModeling"
+         target="_blank" rel="noopener"
+         style="font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);
+                text-decoration:none;display:flex;align-items:center;gap:6px;
+                transition:color .2s;"
+         onmouseover="this.style.color='var(--accent)'"
+         onmouseout="this.style.color='var(--muted)'">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57
+                   0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695
+                   -.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99
+                   .105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225
+                   -.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405
+                   c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225
+                   0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3
+                   0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        GitHub
+      </a>
+      <span style="font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);">
+        Python · CUDA · DXF · GPU Inference
+      </span>
     </div>
   </div>
 </footer>
