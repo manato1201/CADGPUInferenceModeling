@@ -1,4 +1,4 @@
-# cad2asset
+# CADGPUInferenceModeling
 
 **CAD図面（DXF）↔ ゲーム用3Dアセット 双方向変換パイプライン**
 
