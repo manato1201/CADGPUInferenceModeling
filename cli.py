@@ -66,6 +66,7 @@ def run(
     no_roof: bool         = typer.Option(False,  "--no-roof",        help="屋根生成をスキップ"),
     model: str            = typer.Option("triposr", "--model",         help="推論モデル: triposr / zero123 (--infer 時のみ有効)"),
     triposr_resolution: int = typer.Option(256,   "--triposr-res",    help="TripoSR メッシュ解像度 32〜256（デフォルト: 256）"),
+    view_angle: str       = typer.Option("front", "--view-angle",      help="レンダリング視点: front/front_low/front_high/corner/corner_low/corner_high/side/top/iso または EL,AZ形式（例: 25,45）"),
 ):
     """DXF → 押し出し3Dメッシュ + 屋根 + テクスチャ → ゲーム用アセット出力。\n\n--infer オプションを付けると Zero123++ 推論を試みます（実験的機能）。"""
 
@@ -199,11 +200,13 @@ def run(
                 raw_mesh_path = output_dir / "raw_mesh.obj"
                 triposr_cfg = TripoSRConfig(mc_resolution=triposr_resolution)
                 console.print("押し出しメッシュ → TripoSR で外観生成中...")
+                console.print(f"  視点: [cyan]{view_angle}")
                 generate_from_mesh_triposr(
                     floor_mesh,
                     output_path=raw_mesh_path,
                     config=triposr_cfg,
                     render_output_dir=render_dir,
+                    view_angle=view_angle,
                 )
                 console.print(f"[green]✓ TripoSR 完了: {raw_mesh_path}")
             else:
@@ -380,11 +383,13 @@ def run(
                 # 押し出しメッシュがあればそれを入力に使う（より正確な形状）
                 if _extrude_mesh is not None:
                     console.print("押し出しメッシュ → TripoSR パイプラインで生成中...")
+                    console.print(f"  視点: [cyan]{view_angle}")
                     generate_from_mesh_triposr(
                         _extrude_mesh,
                         output_path=raw_mesh_path,
                         config=triposr_cfg,
                         render_output_dir=render_dir,
+                        view_angle=view_angle,
                     )
                 else:
                     console.print("top.png → TripoSR で生成中...")
@@ -493,6 +498,61 @@ def info(
     table.add_row("縦横比",        " : ".join(f"{v:.2f}" for v in meta.aspect_ratio))
     table.add_row("レイヤー",      "\n".join(meta.layers))
     console.print(table)
+
+
+# ─────────────────────────────────────────────
+# コマンド: export（3DメッシュをDXFに変換）
+# ─────────────────────────────────────────────
+
+@app.command()
+def export(
+    mesh_path: Path  = typer.Argument(..., help="入力メッシュ（OBJ / FBX / GLB / STL）"),
+    output:    Path  = typer.Option(None,    "--output", "-o", help="出力DXFパス（省略時は入力と同フォルダ）"),
+    mode:      str   = typer.Option("both",  "--mode",   help="出力モード: triview / floorplan / both"),
+    unit:      str   = typer.Option("mm",    "--unit",   help="出力単位: mm / m"),
+    no_dim:    bool  = typer.Option(False,   "--no-dim", help="寸法線をスキップ"),
+    no_hidden: bool  = typer.Option(False,   "--no-hidden", help="隠線をスキップ"),
+    slice_ratio: float = typer.Option(0.3,  "--slice",  help="平面図スライス高さ（0〜1、建物高さに対する割合）"),
+    gap:       float = typer.Option(2.0,    "--gap",    help="三面図ビュー間の余白 [m]"),
+):
+    """3D メッシュ（OBJ/FBX/GLB）を DXF 図面（三面図・平面図）に変換する。"""
+    from core.mesh_to_dxf import mesh_to_dxf, MeshToDxfConfig
+
+    # 出力パス決定
+    if output is None:
+        output = mesh_path.parent / (mesh_path.stem + ".dxf")
+
+    # モード検証
+    if mode not in ("triview", "floorplan", "both"):
+        console.print(f"[red]❌ 無効なモード: {mode}（triview / floorplan / both）")
+        raise typer.Exit(1)
+    if unit not in ("mm", "m"):
+        console.print(f"[red]❌ 無効な単位: {unit}（mm / m）")
+        raise typer.Exit(1)
+
+    console.rule(f"[bold cyan]3Dメッシュ → DXF 変換")
+    console.print(f"  入力: {mesh_path}")
+    console.print(f"  出力: {output}")
+    console.print(f"  モード: {mode}  単位: {unit}  スライス: {slice_ratio*100:.0f}%")
+
+    cfg = MeshToDxfConfig(
+        mode=mode,
+        output_unit=unit,
+        add_dimensions=not no_dim,
+        show_hidden_lines=not no_hidden,
+        floor_slice_ratio=slice_ratio,
+        view_gap=gap,
+    )
+
+    try:
+        result = mesh_to_dxf(mesh_path, output, config=cfg)
+        console.print(f"[green]✅ DXF 出力完了: {result}")
+        console.print()
+        console.print("Hint: ezdxf ビューアで確認するには:")
+        console.print(f"  python -m ezdxf view {result}")
+    except Exception as e:
+        console.print(f"[red]❌ 変換失敗: {e}")
+        raise typer.Exit(1)
 
 
 # ─────────────────────────────────────────────
