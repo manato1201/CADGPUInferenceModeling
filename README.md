@@ -14,6 +14,14 @@ OBJ / FBX / GLB → Zバッファ隠線判定 → 三面図 + 平面図 → DXF
 
 ---
 
+
+<img width="1196" height="786" alt="スクリーンショット 2026-05-26 215409" src="https://github.com/user-attachments/assets/1c64b99a-406a-47c7-988e-08d765f592f8" />
+<img width="829" height="709" alt="スクリーンショット 2026-05-26 215317" src="https://github.com/user-attachments/assets/33af048f-a110-4e39-bed9-4643654c59cb" />
+<img width="1311" height="605" alt="スクリーンショット 2026-05-30 225934" src="https://github.com/user-attachments/assets/e9dde388-c198-4c40-8c86-889934a63867" />
+<img width="349" height="700" alt="スクリーンショット 2026-05-30 225943" src="https://github.com/user-attachments/assets/8a7fcfb8-06a1-4e6c-97c1-8bfce0ba3222" />
+<img width="921" height="689" alt="スクリーンショット 2026-05-26 204210" src="https://github.com/user-attachments/assets/ee4e55e2-7345-4deb-80b8-08f604455602" />
+
+
 ## ディレクトリ構成
 
 ```
