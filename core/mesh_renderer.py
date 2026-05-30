@@ -44,12 +44,12 @@ class RenderConfig:
     # elevation: 0=水平, 30=斜め上, 90=真上
     # azimuth: 0=正面, 90=左側面, 180=背面, 270=右側面
     viewpoints: list[tuple[float, float]] = field(default_factory=lambda: [
-        (25.0,  45.0),   # 斜め正面（Zero123++の最も得意な視点）
-        (25.0, 135.0),   # 斜め左側
-        (25.0, 315.0),   # 斜め右側
-        (55.0,  45.0),   # 高い斜め（建物俯瞰）
+        (25.0,   0.0),   # 正面・中程度（TripoSR推奨: 建物壁面が見える）
+        (25.0,  90.0),   # 左側面
+        (25.0, 180.0),   # 背面
+        (25.0, 270.0),   # 右側面
     ])
-    # Zero123++入力として使うメインビュー（インデックス）
+    # Zero123++/TripoSR 入力として使うメインビュー（インデックス）
     primary_view_idx: int = 0
 
 
@@ -267,23 +267,56 @@ def render_mesh_views(
     return results
 
 
+# 視点プリセット: --view-angle オプション用
+VIEW_ANGLE_PRESETS: dict[str, tuple[float, float]] = {
+    "front":       (25.0,   0.0),   # 正面（デフォルト・TripoSR推奨）
+    "front_low":   (15.0,   0.0),   # 正面・低め
+    "front_high":  (40.0,   0.0),   # 正面・高め
+    "corner":      (25.0,  45.0),   # 斜め正面
+    "corner_low":  (15.0,  45.0),   # 斜め・低め
+    "corner_high": (40.0,  45.0),   # 斜め・高め
+    "side":        (25.0,  90.0),   # 側面
+    "top":         (75.0,  45.0),   # 俯瞰
+    "iso":         (35.0,  45.0),   # アイソメトリック
+}
+
+
 def render_mesh_for_zero123(
     mesh,
     image_size: int = 512,
     output_dir: Optional[str | Path] = None,
+    view_angle: str = "front",
 ) -> Image.Image:
     """
-    Zero123++ 入力用のメインビュー画像を1枚返す簡易 API。
+    Zero123++/TripoSR 入力用のメインビュー画像を1枚返す簡易 API。
+
+    Parameters
+    ----------
+    view_angle : プリセット名（"front"/"corner"/"side"/"top"等）
+                 または "EL,AZ" 形式で直接指定（例: "25,45"）
 
     Returns
     -------
-    PIL.Image  RGBA 512×512 のシルエット画像
+    PIL.Image  RGB 512×512 のシルエット画像
     """
+    # view_angle の解釈
+    if view_angle in VIEW_ANGLE_PRESETS:
+        el, az = VIEW_ANGLE_PRESETS[view_angle]
+    elif "," in view_angle:
+        try:
+            el, az = [float(v.strip()) for v in view_angle.split(",")]
+        except ValueError:
+            logger.warning(f"view_angle '{view_angle}' を解析できません → front を使用")
+            el, az = VIEW_ANGLE_PRESETS["front"]
+    else:
+        logger.warning(f"未知の view_angle '{view_angle}' → front を使用")
+        el, az = VIEW_ANGLE_PRESETS["front"]
+
+    logger.info(f"レンダリング視点: {view_angle} (elevation={el}°, azimuth={az}°)")
+
     cfg = RenderConfig(
         image_size=image_size,
-        viewpoints=[
-            (30.0, 45.0),   # 斜め正面（建物が最もわかりやすい視点）
-        ],
+        viewpoints=[(el, az)],
         primary_view_idx=0,
     )
     views = render_mesh_views(mesh, config=cfg, output_dir=output_dir)

@@ -113,6 +113,41 @@ def _setup_triposr_path(repo_path: Optional[str] = None) -> Path:
 # 画像前処理
 # ─────────────────────────────────────────────
 
+def _make_foreground_mask(arr_rgb: np.ndarray, bg_thresh: int = 200) -> np.ndarray:
+    """
+    白背景の線画から前景マスクを生成する。
+
+    処理フロー:
+      1. 暗いピクセルを線として検出
+      2. 膨張で線のギャップを埋める
+      3. 塗りつぶしで輪郭内部をマスク化
+      4. 最大連結成分のみ残してノイズ除去
+      5. 収縮で元のサイズに近づける
+    """
+    try:
+        from scipy import ndimage
+    except ImportError:
+        # scipy がない場合は単純な閾値マスク
+        gray = np.mean(arr_rgb, axis=2)
+        return gray < bg_thresh
+
+    gray = np.mean(arr_rgb, axis=2)
+    is_line = gray < bg_thresh
+
+    # 膨張 → 塗りつぶし → 収縮
+    dilated = ndimage.binary_dilation(is_line, iterations=5)
+    filled  = ndimage.binary_fill_holes(dilated)
+    mask    = ndimage.binary_erosion(filled, iterations=3)
+
+    # 最大連結成分のみ残す
+    labeled, n = ndimage.label(mask)
+    if n > 1:
+        sizes   = ndimage.sum(mask, labeled, range(1, n + 1))
+        mask    = labeled == (np.argmax(sizes) + 1)
+
+    return mask
+
+
 def preprocess_image(
     image: Image.Image,
     remove_bg: bool = False,
@@ -122,58 +157,69 @@ def preprocess_image(
     """
     TripoSR への入力画像を前処理する。
 
-    remove_bg=False の場合:
-        白背景・黒前景のシルエット画像として処理
-        （mesh_renderer の出力に適している）
-
-    remove_bg=True の場合:
-        rembg で背景除去してから処理
+    線画・CADシルエット向けの改善版:
+      - 白背景を透過処理（外側の余白がメッシュにならないように）
+      - 前景を塗りつぶしてシルエット化
+      - 前景を中央に配置して余白を均等に
     """
+    img_rgb = np.array(image.convert("RGB"))
+
     if remove_bg:
         try:
             from rembg import remove
             image = remove(image)
+            img_rgba = np.array(image.convert("RGBA"))
+            mask = img_rgba[:,:,3] > 10
         except ImportError:
-            logger.warning("rembg 未インストール → 閾値ベース背景除去")
-            img_arr = np.array(image.convert("RGBA"))
-            white = (img_arr[:,:,0]>240) & (img_arr[:,:,1]>240) & (img_arr[:,:,2]>240)
-            img_arr[white, 3] = 0
-            image = Image.fromarray(img_arr)
+            mask = _make_foreground_mask(img_rgb)
+    else:
+        # 白背景の線画 → 前景マスク生成
+        mask = _make_foreground_mask(img_rgb)
 
-    # RGBA に変換
-    image = image.convert("RGBA")
-    arr = np.array(image)
-    alpha = arr[:,:,3]
+    if not mask.any():
+        logger.warning("前景マスクが空 → 元画像をそのまま使用")
+        return image.convert("RGB").resize((output_size, output_size), Image.LANCZOS)
 
-    rows = np.any(alpha > 10, axis=1)
-    cols = np.any(alpha > 10, axis=0)
+    # 前景領域の bbox を取得
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
+    rmin, rmax = np.where(rows)[0][[0, -1]]
+    cmin, cmax = np.where(cols)[0][[0, -1]]
 
-    if not rows.any() or not cols.any():
-        # 前景なしの場合はそのまま
-        return image.resize((output_size, output_size), Image.LANCZOS)
+    # RGBA で背景を透明化
+    rgba = np.zeros((*img_rgb.shape[:2], 4), dtype=np.uint8)
+    rgba[:,:,:3] = img_rgb
+    rgba[:,:,3]  = np.where(mask, 255, 0)
 
-    rmin, rmax = np.where(rows)[0][[0,-1]]
-    cmin, cmax = np.where(cols)[0][[0,-1]]
-    fg = arr[rmin:rmax+1, cmin:cmax+1]
+    # 前景部分をクロップ
+    fg = rgba[rmin:rmax+1, cmin:cmax+1]
     h, w = fg.shape[:2]
     size = max(h, w)
 
-    # 正方形キャンバスに中央配置
-    canvas = np.zeros((size, size, 4), dtype=np.uint8)
-    canvas[:,:,3] = 255  # 白背景のalphaを不透明に
-    canvas[:,:,:3] = 255  # 白
+    # 正方形キャンバスに中央配置（背景は白）
+    canvas = np.full((size, size, 4), 255, dtype=np.uint8)
+    canvas[:,:,3] = 0   # 背景は透明
     pad_y = (size - h) // 2
     pad_x = (size - w) // 2
     canvas[pad_y:pad_y+h, pad_x:pad_x+w] = fg
 
-    # foreground_ratio で余白調整
+    # foreground_ratio で余白を追加
     final_size = int(size / foreground_ratio)
     final = np.full((final_size, final_size, 4), 255, dtype=np.uint8)
+    final[:,:,3] = 0
     offset = (final_size - size) // 2
     final[offset:offset+size, offset:offset+size] = canvas
 
-    img = Image.fromarray(final)
-    return img.resize((output_size, output_size), Image.LANCZOS)
+    # RGB に変換（白背景合成）
+    result_rgba = Image.fromarray(final, mode="RGBA")
+    result_rgba = result_rgba.resize((output_size, output_size), Image.LANCZOS)
+
+    bg = Image.new("RGB", (output_size, output_size), (255, 255, 255))
+    bg.paste(result_rgba, mask=result_rgba.split()[3])
+
+    logger.info(f"  前景マスク: {mask.sum()/mask.size*100:.1f}% / "
+                f"前景bbox: {rmax-rmin}x{cmax-cmin}px")
+    return bg
 
 
 # ─────────────────────────────────────────────
@@ -328,9 +374,16 @@ def generate_from_mesh_triposr(
     output_path: str | Path = "output.obj",
     config: Optional[TripoSRConfig] = None,
     render_output_dir: Optional[str | Path] = None,
+    view_angle: str = "front",
 ) -> Path:
     """
     押し出し3Dメッシュ → レンダリング → TripoSR → メッシュ のパイプライン。
+
+    Parameters
+    ----------
+    view_angle : レンダリング視点プリセット or "EL,AZ" 形式
+                 プリセット: front / front_low / front_high / corner /
+                             corner_low / corner_high / side / top / iso
     """
     from core.mesh_renderer import render_mesh_for_zero123
 
@@ -340,6 +393,7 @@ def generate_from_mesh_triposr(
         mesh,
         image_size=512,
         output_dir=render_output_dir,
+        view_angle=view_angle,
     )
     logger.info(f"  完了: {input_image.size}")
 
