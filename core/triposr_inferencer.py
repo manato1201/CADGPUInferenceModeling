@@ -366,6 +366,31 @@ class TripoSRInferencer:
 
 
 # ─────────────────────────────────────────────
+# シングルトンファクトリ
+# ─────────────────────────────────────────────
+
+_INSTANCE: Optional[TripoSRInferencer] = None
+
+
+def get_inferencer(config: Optional[TripoSRConfig] = None) -> TripoSRInferencer:
+    """
+    TripoSRInferencer のシングルトンを返す。
+
+    モデルロード（TripoSR 1.7GB のダウンロード・GPUロード）は
+    `.load()` / `.generate_mesh()` 呼び出し時まで遅延されるが、
+    それでも呼び出し側が毎回 `TripoSRInferencer(config)` すると
+    リクエストごとに再ロードが走ってしまう。本関数は既存インスタンスを
+    再利用し、config が前回と異なる場合のみ新規インスタンスに差し替える
+    （古いインスタンスを黙って返さない）。
+    """
+    global _INSTANCE
+    cfg = config or TripoSRConfig()
+    if _INSTANCE is None or _INSTANCE.config != cfg:
+        _INSTANCE = TripoSRInferencer(cfg)
+    return _INSTANCE
+
+
+# ─────────────────────────────────────────────
 # 押し出しメッシュ → TripoSR パイプライン
 # ─────────────────────────────────────────────
 
@@ -398,5 +423,5 @@ def generate_from_mesh_triposr(
     logger.info(f"  完了: {input_image.size}")
 
     logger.info("Step 2: TripoSR で3Dメッシュ生成中...")
-    infer = TripoSRInferencer(config)
+    infer = get_inferencer(config)
     return infer.generate_mesh(input_image, output_path=output_path)
