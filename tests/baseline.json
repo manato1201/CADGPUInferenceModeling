@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-07-03T07:44:00",
+  "python_version": "3.12.10",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "sample_file": "2DDXF_Sample.dxf",
+  "extrusion_sec": 114.97888580001018,
+  "hidden_line_sec": 0.8486972999962745,
+  "inference_sec": null,
+  "mesh_stats": {
+    "verts": 1098,
+    "faces": 1932
+  }
+}
