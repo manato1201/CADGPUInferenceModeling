@@ -389,6 +389,31 @@ class Zero123PlusPlusInferencer:
 
 
 # ─────────────────────────────────────────────
+# シングルトンファクトリ
+# ─────────────────────────────────────────────
+
+_INSTANCE: Optional[Zero123PlusPlusInferencer] = None
+
+
+def get_inferencer(config: Optional[InferenceConfig] = None) -> Zero123PlusPlusInferencer:
+    """
+    Zero123PlusPlusInferencer のシングルトンを返す。
+
+    モデルロード（Zero123++ 5.6GB のダウンロード・GPUロード）は
+    `.load()` 呼び出し時まで遅延されるが、それでも呼び出し側が毎回
+    `Zero123PlusPlusInferencer(config)` すると API リクエストごとに
+    再ロードが走ってしまう。本関数は既存インスタンスを再利用し、
+    config が前回と異なる場合のみ新規インスタンスに差し替える
+    （古いインスタンスを黙って返さない）。
+    """
+    global _INSTANCE
+    cfg = config or InferenceConfig()
+    if _INSTANCE is None or _INSTANCE.config != cfg:
+        _INSTANCE = Zero123PlusPlusInferencer(cfg)
+    return _INSTANCE
+
+
+# ─────────────────────────────────────────────
 # 内部ユーティリティ
 # ─────────────────────────────────────────────
 

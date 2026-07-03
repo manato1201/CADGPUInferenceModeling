@@ -16,8 +16,10 @@ core/ を再利用して REST API として公開する。
 
 from __future__ import annotations
 
+import os
 import uuid
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -27,10 +29,35 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("cad2asset.api")
 
+
+# ─────────────────────────────────────────────
+# ライフサイクル（起動時ウォームアップ、オプション）
+# ─────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    アプリ起動時のフック。
+
+    環境変数 PRELOAD_MODELS=1 の場合のみ、起動時に Zero123++ を
+    事前ロードしてシングルトンをウォームアップする（初回リクエストの
+    レイテンシを削減）。未設定・それ以外の値の場合は何もせず、
+    従来通り初回リクエスト時の遅延ロードのままにする。
+    """
+    if os.environ.get("PRELOAD_MODELS") == "1":
+        logger.info("PRELOAD_MODELS=1: Zero123++ を起動時にウォームアップロード中...")
+        from core.inferencer import get_inferencer
+
+        get_inferencer().load()
+        logger.info("Zero123++ ウォームアップロード完了。")
+    yield
+
+
 app = FastAPI(
     title="cad2asset API",
     description="CAD図面（DXF）→ ゲーム用3Dアセット（glTF）変換 REST API",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # ── ジョブストア（フェーズ2では Redis + Celery に差し替える） ──
@@ -64,7 +91,7 @@ def _run_pipeline(job_id: str, dxf_path: Path) -> None:
 
     try:
         from core.parser import parse_dxf, save_views
-        from core.inferencer import Zero123PlusPlusInferencer, InferenceConfig
+        from core.inferencer import get_inferencer
         from core.postprocessor import postprocess, PostprocessConfig
 
         # Step 1: パース
@@ -72,7 +99,7 @@ def _run_pipeline(job_id: str, dxf_path: Path) -> None:
         save_views(result, output_dir / "views")
 
         # Step 2: 推論
-        infer = Zero123PlusPlusInferencer(InferenceConfig())
+        infer = get_inferencer()
         views = infer.generate_views(result.views["front"])
         raw_mesh = output_dir / "raw_mesh.glb"
         infer.generate_mesh(views, output_path=raw_mesh)
