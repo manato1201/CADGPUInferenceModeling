@@ -22,6 +22,7 @@ from typing import Literal, Optional
 
 import ezdxf
 import numpy as np
+from scipy.spatial import cKDTree
 
 logger = logging.getLogger(__name__)
 
@@ -232,10 +233,14 @@ def _snap_endpoints(
         if px != py:
             parent[px] = py
 
-    for i in range(n):
-        for j in range(i+1, n):
-            if np.hypot(pts[i,0]-pts[j,0], pts[i,1]-pts[j,1]) < tol:
-                union(i, j)
+    # 空間インデックス(KD-Tree)で近接端点ペアを O(N log N) で取得。
+    # 注意: query_pairs(r=tol) は distance <= tol (以下) で判定するため、
+    # 旧実装の distance < tol (未満) とは境界値 (distance == tol) の扱いのみ異なる。
+    # 浮動小数点座標では実質的に無視できる差であり、Union-Findのロジックは変更しない。
+    tree = cKDTree(pts)
+    pairs = tree.query_pairs(r=tol)
+    for i, j in pairs:
+        union(i, j)
 
     # クラスタの重心を代表点とする
     clusters: dict[int, list] = {}
