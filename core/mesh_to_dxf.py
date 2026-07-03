@@ -35,6 +35,7 @@ class MeshToDxfConfig:
     simplify_tolerance: float = 0.01
     floor_slice_ratio: float = 0.3
     output_unit: Literal["mm", "m"] = "mm"
+    zbuf_size: int = 1024              # Zバッファ深度マップ解像度（高いほど可視率↑・処理時間↑）
     layer_visible: str = "VISIBLE"
     layer_hidden:  str = "HIDDEN"
     layer_dim:     str = "DIMENSION"
@@ -551,7 +552,7 @@ def _write_triview(doc, mesh, cfg, us, offset_y=0.0):
     for ax_h, ax_v, ax_d, ox, oy, label, w, h in views:
         # シルエット（可視輪郭）と隠線を分離して取得
         silhouette_edges, hidden_edges = _get_silhouette_and_hidden(
-            mesh, ax_h, ax_v, ax_d
+            mesh, ax_h, ax_v, ax_d, zbuf_size=cfg.zbuf_size
         )
 
         # シルエットエッジを VISIBLE レイヤーに描画

@@ -322,8 +322,18 @@ def _estimate_wall_thickness(
     if len(distances) < 3:
         return default_thickness
 
-    estimated = float(np.median(distances))
-    logger.info(f"壁厚自動推定: {estimated:.0f}mm (サンプル数={len(distances)})")
+    # 外れ値除外（IQR×1.5ルール）: ノイズ的に検出された非壁ペアの影響を抑える
+    arr = np.array(distances)
+    q1, q3 = np.percentile(arr, [25, 75])
+    iqr = q3 - q1
+    if iqr > 0:
+        lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        filtered = arr[(arr >= lower) & (arr <= upper)]
+        if len(filtered) >= 3:
+            arr = filtered
+
+    estimated = float(np.median(arr))
+    logger.info(f"壁厚自動推定: {estimated:.0f}mm (サンプル数={len(distances)}, 採用後={len(arr)})")
     return estimated
 
 
@@ -701,6 +711,10 @@ def extrude_floor_plan(
         wall_thickness = cfg.wall_thickness
 
     # ── ① 端点スナップ ────────────────────────────
+    # NOTE: 推定壁厚に応じた動的snap_tol(下限10mm)を試したが、実測
+    # (2DDXF_Sample.dxf)で端点未統合(隙間残存)が155本中43本で発生する
+    # リグレッションを確認したため見送り。壁の隙間解消というsnap本来の
+    # 目的を優先し、cfg.wall_snap_tol固定値を維持する。
     global cfg_min_snap
     cfg_min_snap = cfg.min_wall_length * 0.5
     all_wall_segs = _snap_endpoints(all_wall_segs, cfg.wall_snap_tol)
