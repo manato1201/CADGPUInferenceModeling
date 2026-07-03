@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 import ezdxf
+import numba
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,60 @@ def _extract_silhouette(mesh, ax_h, ax_v, simplify_tol=0.01):
 # Zバッファラスタライザ（深度画像ベース隠線判定）
 # ─────────────────────────────────────────────
 
+@numba.njit(cache=True)
+def _rasterize_faces(px_h, px_v, pts_d, faces, size):
+    """
+    三角形群をZバッファへラスタライズする（numba nopythonモードでJITコンパイル）。
+
+    数学的アルゴリズム（重心座標によるカバレッジ判定・深度更新条件）は
+    元のnumpyベクトル化実装（np.meshgrid + ブールマスク）と完全に同一で、
+    三角形ごと・ピクセルごとのネストしたforループに書き換えただけである。
+
+    注意: njit関数は初回呼び出し時にJITコンパイルされるため、初回のみ
+    数秒のウォームアップオーバーヘッドが発生する（2回目以降は cache=True
+    によりディスクキャッシュされたネイティブコードが再利用され高速）。
+    ベンチマーク計測時はこのウォームアップ込みの初回と、ウォームアップ後の
+    実行時間を分けて見るとよい。
+    """
+    z_buf = np.full((size, size), np.inf, dtype=np.float32)
+    n_faces = faces.shape[0]
+
+    for fi in range(n_faces):
+        a = faces[fi, 0]
+        b = faces[fi, 1]
+        c = faces[fi, 2]
+        h0 = px_h[a]; h1 = px_h[b]; h2 = px_h[c]
+        v0 = px_v[a]; v1 = px_v[b]; v2 = px_v[c]
+        d0 = pts_d[a]; d1 = pts_d[b]; d2 = pts_d[c]
+
+        # バウンディングボックス
+        xmin = max(0,      int(min(h0, h1, h2)))
+        xmax = min(size-1, int(max(h0, h1, h2)) + 1)
+        ymin = max(0,      int(min(v0, v1, v2)))
+        ymax = min(size-1, int(max(v0, v1, v2)) + 1)
+        if xmin >= xmax or ymin >= ymax:
+            continue
+
+        # バリセントリック座標でピクセルをカバー
+        area = (h1-h0)*(v2-v0) - (h2-h0)*(v1-v0)
+        if abs(area) < 0.5:
+            continue
+
+        for py in range(ymin, ymax):
+            gy = np.float32(py)
+            for px in range(xmin, xmax):
+                gx = np.float32(px)
+                w0 = ((h1-h2)*(gx-h2) + (v2-v1)*(gy-v2)) / area
+                w1 = ((h2-h0)*(gx-h0) + (v0-v2)*(gy-v0)) / area
+                w2 = 1.0 - w0 - w1
+                if w0 >= -0.01 and w1 >= -0.01 and w2 >= -0.01:
+                    depth = w0*d0 + w1*d1 + w2*d2
+                    if depth < z_buf[py, px]:
+                        z_buf[py, px] = depth
+
+    return z_buf
+
+
 def _build_zbuffer(
     verts: np.ndarray,
     faces: np.ndarray,
@@ -290,45 +345,9 @@ def _build_zbuffer(
     px_h = (pts_h * scale_h + off_h).astype(np.float32)
     px_v = ((1.0 - (pts_v * scale_v + off_v) / size) * size).astype(np.float32)
 
-    z_buf = np.full((size, size), np.inf, dtype=np.float32)
-
-    # 三角形ごとにラスタライズ
-    for face in faces:
-        a, b, c = face
-        h0, h1, h2 = px_h[a], px_h[b], px_h[c]
-        v0, v1, v2 = px_v[a], px_v[b], px_v[c]
-        d0, d1, d2 = pts_d[a], pts_d[b], pts_d[c]
-
-        # バウンディングボックス
-        xmin = max(0,      int(min(h0, h1, h2)))
-        xmax = min(size-1, int(max(h0, h1, h2)) + 1)
-        ymin = max(0,      int(min(v0, v1, v2)))
-        ymax = min(size-1, int(max(v0, v1, v2)) + 1)
-        if xmin >= xmax or ymin >= ymax:
-            continue
-
-        # バリセントリック座標でピクセルをカバー
-        area = (h1-h0)*(v2-v0) - (h2-h0)*(v1-v0)
-        if abs(area) < 0.5:
-            continue
-
-        xs = np.arange(xmin, xmax, dtype=np.float32)
-        ys = np.arange(ymin, ymax, dtype=np.float32)
-        gx, gy = np.meshgrid(xs, ys)
-
-        w0 = ((h1-h2)*(gx-h2) + (v2-v1)*(gy-v2)) / area
-        w1 = ((h2-h0)*(gx-h0) + (v0-v2)*(gy-v0)) / area
-        w2 = 1.0 - w0 - w1
-        inside = (w0 >= -0.01) & (w1 >= -0.01) & (w2 >= -0.01)
-        if not inside.any():
-            continue
-
-        depth  = w0*d0 + w1*d1 + w2*d2
-        gyi    = gy[inside].astype(np.int32)
-        gxi    = gx[inside].astype(np.int32)
-        di     = depth[inside]
-        update = di < z_buf[gyi, gxi]
-        z_buf[gyi[update], gxi[update]] = di[update]
+    # 三角形ごとのラスタライズ（numba njit化、アルゴリズムは元実装と同一）
+    faces_i32 = np.ascontiguousarray(faces, dtype=np.int32)
+    z_buf = _rasterize_faces(px_h, px_v, pts_d, faces_i32, size)
 
     params = (h_min, h_max, v_min, v_max,
               scale_h, scale_v, off_h, off_v, size)
