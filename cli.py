@@ -211,9 +211,9 @@ def run(
                 console.print(f"[green]✓ TripoSR 完了: {raw_mesh_path}")
             else:
                 console.rule("[bold cyan]Route C-2: Zero123++ 外観生成")
-                from core.inferencer import Zero123PlusPlusInferencer, InferenceConfig
+                from core.inferencer import InferenceConfig, get_inferencer
                 infer_cfg = InferenceConfig(num_inference_steps=infer_steps)
-                infer = Zero123PlusPlusInferencer(infer_cfg)
+                infer = get_inferencer(infer_cfg)
                 raw_mesh_path = output_dir / "raw_mesh.glb"
                 console.print("レンダリング + Zero123++ 推論中...")
                 infer.generate_from_floor_plan_mesh(
@@ -376,7 +376,7 @@ def run(
             # ── モデル選択: TripoSR or Zero123++ ──────────
             if model.lower() == "triposr":
                 console.rule("[bold cyan]Route A-1: TripoSR 推論")
-                from core.triposr_inferencer import TripoSRInferencer, TripoSRConfig, generate_from_mesh_triposr
+                from core.triposr_inferencer import TripoSRConfig, generate_from_mesh_triposr, get_inferencer
 
                 triposr_cfg = TripoSRConfig(mc_resolution=triposr_resolution)
 
@@ -393,17 +393,17 @@ def run(
                     )
                 else:
                     console.print("top.png → TripoSR で生成中...")
-                    infer = TripoSRInferencer(triposr_cfg)
+                    infer = get_inferencer(triposr_cfg)
                     infer.generate_mesh(result.views["top"], output_path=raw_mesh_path)
 
                 console.print(f"[green]✓ TripoSR 完了: {raw_mesh_path}")
 
             else:
                 console.rule("[bold cyan]Route A-1: Zero123++ 推論")
-                from core.inferencer import Zero123PlusPlusInferencer, InferenceConfig
+                from core.inferencer import InferenceConfig, get_inferencer
 
                 z123_config = InferenceConfig(num_inference_steps=infer_steps)
-                infer = Zero123PlusPlusInferencer(z123_config)
+                infer = get_inferencer(z123_config)
 
                 input_img = result.views["top"]
                 console.print("Zero123++ 推論中...")
