@@ -38,7 +38,15 @@ cad2asset/
 │   └── postprocessor.py       # メッシュ修復・LOD生成・エクスポート
 ├── cli.py                     # CLIエントリポイント（run / export / info コマンド）
 ├── fbx2obj.py                 # FBX → OBJ 変換ツール（Blender経由）
-├── api.py                     # FastAPI エントリポイント（フェーズ2）
+├── api.py                     # FastAPI エントリポイント（REST API、ジョブキュー方式）
+├── tests/                     # pytest テスト・性能ベースライン計測
+│   ├── test_accuracy.py       # 寸法精度・Zバッファ可視率のリグレッションテスト
+│   ├── test_singleton.py      # 推論モデルのシングルトン化テスト
+│   ├── test_api_robustness.py # APIエラー分類・ジョブストアTTLのテスト
+│   ├── bench.py                # 処理時間の計測スクリプト（baseline.json出力）
+│   └── baseline.json           # 計測ベースライン（bench.py の出力）
+├── docs/
+│   └── PERF_RESULTS.md        # 性能改善の実測結果サマリー
 ├── TripoSR/                   # TripoSR リポジトリ（git clone で配置）
 ├── requirements.txt
 ├── .gitignore
@@ -124,10 +132,12 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 
 ```bash
 pip install -r requirements.txt
-pip install shapely scipy scikit-image onnxruntime
+
+# TripoSR フォールバック用（torchmcubes 未使用時の skimage marching cubes 等）
+pip install scikit-image onnxruntime
 ```
 
-### 4. TripoSR セットアップ（--infer --model triposr を使う場合）
+### 4. TripoSR セットアップ（--infer --model triposr を使う場合。デフォルトの推論モデル）
 
 ```bash
 git clone https://github.com/VAST-AI-Research/TripoSR.git
@@ -156,6 +166,67 @@ except ImportError:
 ```powershell
 $env:TRIPOSR_PATH = "C:\path\to\CADGPUInferenceModeling\TripoSR"
 ```
+
+### 5. 動作確認（セットアップ後）
+
+```bash
+pip install pytest
+python -m pytest tests/ -v
+```
+
+推論（GPU・モデルダウンロード）を伴わないテストが全件パスすればセットアップは完了。
+
+> **既知の問題（`--model zero123` を使う場合）**: `diffusers`・`transformers`・`accelerate`・
+> `huggingface_hub` の組み合わせによってはバージョン不整合で `diffusers` のimportが失敗する
+> ことがある（`pip check` で確認可能）。この場合デフォルトの `--model triposr` は影響を受けない。
+> 発生した場合は `transformers`/`tokenizers`/`accelerate`/`diffusers`/`huggingface_hub` を
+> 相互に整合するバージョンへまとめて上げる必要があり、個別のバージョンだけを上げると
+> 別の組み合わせが壊れるため注意（詳細は [docs/PERF_RESULTS.md](docs/PERF_RESULTS.md) 参照）。
+
+---
+
+## テスト・性能ベースライン
+
+```bash
+# 単体テスト（寸法精度・Zバッファ可視率・モデルシングルトン・APIエラー分類）
+python -m pytest tests/ -v
+
+# 処理時間の計測（2DDXF_Sample.dxf の押し出し・隠線判定を計測し tests/baseline.json を更新）
+python tests/bench.py
+```
+
+現状の実測結果・ボトルネック分析は [docs/PERF_RESULTS.md](docs/PERF_RESULTS.md) を参照。
+
+---
+
+## API サーバー（REST API）
+
+```bash
+# 起動（DXFアップロード→非同期変換ジョブ）
+uvicorn api:app --reload --host 0.0.0.0 --port 8000
+
+# 起動時にZero123++を事前ロードしたい場合（初回リクエストのレイテンシ削減）
+$env:PRELOAD_MODELS = "1"   # PowerShell
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+| エンドポイント | 説明 |
+|---|---|
+| `POST /convert` | DXFをアップロードして変換ジョブを登録（202を即返し、バックグラウンドで実行） |
+| `GET /jobs/{job_id}` | ジョブ状態を確認（`status`: queued/running/done/failed、失敗時は`error_category`も返す） |
+| `GET /jobs/{job_id}/download/{lod_name}` | 変換済みアセット（LOD0/LOD1/LOD2）をダウンロード |
+| `GET /health` | ヘルスチェック |
+
+### 環境変数
+
+| 変数名 | デフォルト | 説明 |
+|---|---|---|
+| `PRELOAD_MODELS` | 未設定 | `1`でZero123++を起動時に事前ロード。未設定時は初回リクエスト時に遅延ロード |
+| `JOB_TIMEOUT_SEC` | `600` | ジョブ1件あたりのタイムアウト秒数。超過時は`error_category="timeout"`で失敗扱い（Pythonスレッドは強制終了できないため、内部処理自体は継続する場合がある） |
+| `MAX_JOBS` | `500` | ジョブストア（メモリ上）の最大保持件数。超過時は完了済みジョブから古い順に削除 |
+| `JOB_TTL_SEC` | `3600` | 完了済みジョブの保持時間（秒）。超過すると一時ファイルごと削除 |
+
+`error_category`は`input_error`（壊れたDXF等）/ `inference_error`（GPU/推論エラー）/ `timeout` / `system_error`のいずれか。
 
 ---
 
@@ -393,9 +464,17 @@ Window → Package Manager → Add package by name
 ## トラブルシューティング
 
 ### `ModuleNotFoundError: No module named 'shapely'`
+`requirements.txt`に含まれているはずなので、まず`pip install -r requirements.txt`を再実行。個別に入れる場合:
 ```bash
 pip install shapely
 ```
+
+### `ImportError: cannot import name 'HF_HOME' from 'huggingface_hub.constants'`（`--model zero123`使用時）
+`huggingface_hub`が古く、`diffusers`・`accelerate`の要求バージョンを満たしていない。`pip check`で不整合を確認できる。
+```bash
+pip check
+```
+**単純に`pip install -U huggingface_hub`だけを実行しない**こと。`transformers`/`tokenizers`が要求する上限バージョンと衝突し、別のImportErrorを引き起こす（`tokenizers 0.14.1`は`huggingface_hub<0.18`を要求するため）。修正するには`transformers`・`tokenizers`・`accelerate`・`diffusers`・`huggingface_hub`を相互に整合する組み合わせへまとめて更新する必要がある。デフォルトの`--model triposr`はこの問題の影響を受けない。
 
 ### `ModuleNotFoundError: No module named 'typer'`
 仮想環境が無効。`.venv\Scripts\Activate.ps1` を実行してから再試行。
@@ -442,3 +521,4 @@ WindowsでpyassimpはDLL本体が別途必要。`fbx2obj.py` でBlender経由変
 | 押し出し処理速度 | 建築図面(壁156本規模)で約2分 | 開口部カットのブーリアン演算が支配的。詳細は[docs/PERF_RESULTS.md](docs/PERF_RESULTS.md) |
 | DWG | 直接読み込み不可 | ODA File Converter で変換 |
 | 寸法線 | 外形寸法のみ自動生成 | 内部詳細寸法は手動追加要 |
+| `--model zero123` | 環境によりimportエラーで動作しない場合あり | `huggingface_hub`/`diffusers`/`transformers`のバージョン不整合。トラブルシューティング参照。`--model triposr`（デフォルト）は影響なし |

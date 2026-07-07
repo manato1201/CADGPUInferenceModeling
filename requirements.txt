@@ -13,6 +13,7 @@ trimesh>=4.3.0        # glTF/OBJ エクスポート
 pyglet<2              # trimesh の可視化依存
 scipy>=1.11.0         # 退化三角形除去・KDTree等の数値処理
 numba>=0.65.1         # Zバッファラスタライズのnjit高速化(mesh_to_dxf.py)
+shapely>=2.0.0        # 平面図・屋根のポリゴン演算(mesh_to_dxf.py / roof_generator.py)
 
 # ── GPU推論（Zero123++）────────────────────
 torch>=2.2.0          # CUDA対応版は別途インストール
