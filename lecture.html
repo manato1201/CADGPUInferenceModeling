@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CAD×GPU推論 講義資料 — CADGPUInferenceModeling</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans+JP:wght@300;400;500;600&display=swap');
+
+:root {
+  --bg:      #fafaf8;
+  --paper:   #ffffff;
+  --ink:     #1a1a1a;
+  --ink2:    #444;
+  --muted:   #888;
+  --border:  #e0ddd8;
+  --accent:  #c0392b;
+  --accent2: #2980b9;
+  --accent3: #27ae60;
+  --yellow:  #f39c12;
+  --code-bg: #f4f1ec;
+  --marker:  rgba(243,156,18,.18);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans JP', sans-serif;
+  font-weight: 300;
+  line-height: 1.85;
+  counter-reset: section;
+}
+
+/* ── 印刷用レイアウト ── */
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 32px 80px;
+}
+
+/* ── COVER ── */
+.cover {
+  background: var(--ink);
+  color: white;
+  padding: 80px 64px;
+  margin-bottom: 0;
+  position: relative;
+  overflow: hidden;
+}
+.cover::before {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 300px; height: 300px;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent, transparent 8px,
+    rgba(255,255,255,.03) 8px, rgba(255,255,255,.03) 9px
+  );
+}
+.cover-klass {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: .2em;
+  color: #aaa;
+  margin-bottom: 40px;
+  text-transform: uppercase;
+}
+.cover h1 {
+  font-size: clamp(28px, 4vw, 48px);
+  font-weight: 600;
+  line-height: 1.25;
+  margin-bottom: 24px;
+  letter-spacing: -.02em;
+}
+.cover h1 em {
+  font-style: normal;
+  color: #e74c3c;
+}
+.cover-sub {
+  font-size: 16px;
+  color: #bbb;
+  max-width: 560px;
+  line-height: 1.7;
+}
+.cover-meta {
+  margin-top: 56px;
+  display: flex;
+  gap: 40px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #888;
+  flex-wrap: wrap;
+}
+.cover-meta span { color: white; display: block; font-size: 13px; }
+
+/* ── TOC ── */
+.toc {
+  background: var(--paper);
+  border: 1px solid var(--border);
+  padding: 40px 48px;
+  margin: 32px 0 48px;
+}
+.toc-title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: .2em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 24px;
+}
+.toc ol {
+  list-style: none;
+  counter-reset: toc;
+}
+.toc li {
+  counter-increment: toc;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px dotted var(--border);
+  font-size: 14px;
+}
+.toc li::before {
+  content: counter(toc, decimal-leading-zero);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.toc a { color: var(--ink2); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+.toc .dots { flex: 1; border-bottom: 1px dotted var(--border); margin: 0 4px; min-width: 20px; }
+
+/* ── SECTIONs ── */
+.section {
+  margin-bottom: 64px;
+  counter-increment: section;
+}
+.sec-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 32px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--ink);
+}
+.sec-num {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--accent);
+  padding-top: 6px;
+  flex-shrink: 0;
+  letter-spacing: .1em;
+}
+.sec-header h2 {
+  font-size: clamp(20px, 2.5vw, 28px);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -.01em;
+}
+.sec-header h2 small {
+  display: block;
+  font-size: 12px;
+  font-weight: 300;
+  color: var(--muted);
+  margin-top: 4px;
+  letter-spacing: .05em;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+/* ── CALLOUT BOXES ── */
+.box {
+  border-left: 4px solid var(--border);
+  padding: 16px 20px;
+  margin: 20px 0;
+  background: var(--paper);
+  border-radius: 0 4px 4px 0;
+}
+.box.point  { border-color: var(--accent);  background: #fdf5f4; }
+.box.note   { border-color: var(--accent2); background: #f4f8fd; }
+.box.tip    { border-color: var(--accent3); background: #f4faf6; }
+.box.warn   { border-color: var(--yellow);  background: #fefaf0; }
+.box-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.box.point  .box-label { color: var(--accent);  }
+.box.note   .box-label { color: var(--accent2); }
+.box.tip    .box-label { color: var(--accent3); }
+.box.warn   .box-label { color: var(--yellow);  }
+.box p, .box li { font-size: 14px; color: var(--ink2); }
+
+/* ── CODE ── */
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 20px 24px;
+  overflow-x: auto;
+  margin: 16px 0;
+  position: relative;
+}
+pre .lang-label {
+  position: absolute;
+  top: 8px; right: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--ink);
+}
+.k { color: #8e44ad; font-weight: 600; }  /* keyword */
+.s { color: #27ae60; }                     /* string */
+.c { color: #95a5a6; font-style: italic; } /* comment */
+.n { color: #2980b9; }                     /* number/name */
+
+/* ── TABLE ── */
+.tbl-wrap { overflow-x: auto; margin: 20px 0; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th {
+  background: var(--ink);
+  color: white;
+  padding: 10px 16px;
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: .06em;
+  font-family: 'IBM Plex Mono', monospace;
+}
+td { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+tr:nth-child(even) td { background: var(--bg); }
+.highlight td { background: var(--marker) !important; font-weight: 500; }
+
+/* ── DIAGRAM ── */
+.diagram {
+  background: var(--paper);
+  border: 1px solid var(--border);
+  padding: 32px;
+  margin: 24px 0;
+  text-align: center;
+  position: relative;
+}
+.diagram-title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .15em;
+  margin-bottom: 24px;
+}
+.flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  flex-wrap: wrap;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+}
+.flow-node {
+  border: 1px solid var(--border);
+  padding: 10px 16px;
+  background: white;
+  min-width: 90px;
+  text-align: center;
+  line-height: 1.4;
+}
+.flow-node.red    { border-color: var(--accent);  background: #fdf5f4; color: var(--accent); }
+.flow-node.blue   { border-color: var(--accent2); background: #f4f8fd; color: var(--accent2); }
+.flow-node.green  { border-color: var(--accent3); background: #f4faf6; color: var(--accent3); }
+.flow-node small  { display: block; color: var(--muted); font-size: 9px; margin-top: 3px; }
+.flow-arrow { padding: 0 8px; color: var(--muted); font-size: 16px; }
+
+/* ── MATH / FORMULA ── */
+.formula {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  padding: 16px 24px;
+  margin: 16px 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  text-align: center;
+  color: #2c3e50;
+}
+
+/* ── PROGRESS BAR ── */
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.progress-label { width: 100px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+.progress-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent2);
+}
+.progress-val { font-family: 'IBM Plex Mono', monospace; font-size: 12px; width: 50px; text-align: right; }
+
+/* ── TEXT ── */
+h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 28px 0 12px;
+  color: var(--ink);
+}
+h3::before {
+  content: '▸ ';
+  color: var(--accent);
+}
+p { color: var(--ink2); font-size: 14px; margin-bottom: 14px; }
+ul, ol { padding-left: 20px; margin-bottom: 14px; }
+li { font-size: 14px; color: var(--ink2); margin-bottom: 4px; }
+mark { background: var(--marker); padding: 1px 3px; border-radius: 2px; }
+strong { color: var(--ink); }
+
+/* ── QUIZ ── */
+.quiz {
+  background: #f0f4ff;
+  border: 1px solid #c5d5f8;
+  border-radius: 4px;
+  padding: 20px 24px;
+  margin: 24px 0;
+}
+.quiz-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: #5470c6;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.quiz p { color: #2c3e50; font-weight: 500; }
+
+/* ── SECTION DIVIDER ── */
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 48px 0;
+}
+
+/* ── NAV ── */
+.nav-bar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--ink);
+  padding: 10px 32px;
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #aaa;
+  overflow-x: auto;
+}
+.nav-bar a {
+  color: #aaa;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color .15s;
+}
+.nav-bar a:hover { color: white; }
+.nav-brand { color: #e74c3c; margin-right: 16px; font-weight: 600; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav-bar">
+  <span class="nav-brand">CADGPUInferenceModeling</span>
+  <a href="#s1">01 概要</a>
+  <a href="#s2">02 ルート判定</a>
+  <a href="#s3">03 Zバッファ</a>
+  <a href="#s4">04 CAD文字コード</a>
+  <a href="#s5">05 押し出し改善</a>
+  <a href="#s6">06 GPU推論</a>
+  <a href="#s7">07 精度・設計</a>
+</nav>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="page">
+    <div class="cover-klass">ゲームエンジニア向け 実践技術講義 / CAD × GPU推論</div>
+    <h1>
+      CAD図面から<em>ゲームアセット</em>を<br>
+      自動生成するパイプラインの<br>
+      設計と実装
+    </h1>
+    <p class="cover-sub">
+      DXF解析・押し出しアルゴリズム・Zバッファ隠線判定・TripoSR推論まで、
+      実際に動くコードを通じてゲーム開発に直結する3D処理を学ぶ。
+    </p>
+    <div class="cover-meta">
+      <div>対象<span>ゲームエンジニア志望 / 3年生〜</span></div>
+      <div>前提知識<span>Python基礎 / 線形代数基礎</span></div>
+      <div>プロジェクト<span>CADGPUInferenceModeling</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="page">
+
+<!-- TOC -->
+<div class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s1">なぜCAD→ゲームアセット変換が必要か</a><span class="dots"></span></li>
+    <li><a href="#s2">DXFファイルの構造とルート自動判定</a><span class="dots"></span></li>
+    <li><a href="#s3">Zバッファによる隠線判定アルゴリズム</a><span class="dots"></span></li>
+    <li><a href="#s4">文字コードの罠：CP932 Mojibake問題</a><span class="dots"></span></li>
+    <li><a href="#s5">建築平面図の押し出し改善5項目</a><span class="dots"></span></li>
+    <li><a href="#s6">GPU推論パイプラインの設計と限界</a><span class="dots"></span></li>
+    <li><a href="#s7">精度評価・設計判断の考え方</a><span class="dots"></span></li>
+  </ol>
+</div>
+
+<!-- ─── 01 ─── -->
+<div class="section" id="s1">
+  <div class="sec-header">
+    <div class="sec-num">01</div>
+    <h2>なぜCAD→ゲームアセット変換が必要か<small>背景・動機・設計思想</small></h2>
+  </div>
+
+  <div class="box point">
+    <div class="box-label">この章のポイント</div>
+    <p>「何を作るか」より<strong>「なぜ作るか」</strong>を先に理解することで、設計判断の理由がわかる。</p>
+  </div>
+
+  <h3>ゲーム開発における手作業のコスト</h3>
+  <p>
+    建築・乗り物・設備を扱うゲームタイトルでは、設計図面が先に存在することが多い。
+    しかし CAD ソフト（AutoCAD等）の出力と、Unity/Unreal が読めるフォーマットは異なる。
+    その「翻訳」を手作業でやっているスタジオが今もある。
+  </p>
+
+  <div class="diagram">
+    <div class="diagram-title">従来の手作業フロー vs 自動化フロー</div>
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:16px;align-items:start;text-align:left;">
+      <div style="border:1px solid #e74c3c;padding:20px;border-radius:4px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#e74c3c;margin-bottom:12px;">BEFORE（手作業）</div>
+        <div style="font-size:13px;line-height:2;color:#555;">
+          設計者がDXFを作成<br>
+          ↓<br>
+          モデラーが手動で3D化（数日〜数週間）<br>
+          ↓<br>
+          エンジニアがUnityに取り込み<br>
+          ↓<br>
+          修正が入るたびに繰り返し
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;font-size:24px;color:#888;padding-top:60px;">→</div>
+      <div style="border:1px solid #27ae60;padding:20px;border-radius:4px;background:#f4faf6;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#27ae60;margin-bottom:12px;">AFTER（自動化）</div>
+        <div style="font-size:13px;line-height:2;color:#555;">
+          設計者がDXFを作成<br>
+          ↓<br>
+          <strong>cli.py run building.dxf（〜10秒）</strong><br>
+          ↓<br>
+          Unity/UEにインポート可能なOBJ
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>このパイプラインが解く問題</h3>
+  <ul>
+    <li><strong>形式の不一致</strong>：DXF は CAD 専用、OBJ/GLB はゲームエンジン向け</li>
+    <li><strong>3D情報の不足</strong>：建築平面図は2Dなので、高さ情報をアルゴリズムで補完する必要がある</li>
+    <li><strong>逆変換の需要</strong>：ゲームアセットから設計図面を逆生成したいケースも存在する</li>
+  </ul>
+
+  <div class="box tip">
+    <div class="box-label">設計方針</div>
+    <p>
+      「完璧なAI推論」より「正確なアルゴリズム」を優先した。
+      TripoSRなどの汎用推論モデルは建築物に対して学習分布とのズレが大きく、
+      ゲームアセットとしての実用性は<strong>押し出しメッシュの方が高い</strong>と判断した。
+    </p>
+  </div>
+</div>
+
+<!-- ─── 02 ─── -->
+<div class="section" id="s2">
+  <div class="sec-header">
+    <div class="sec-num">02</div>
+    <h2>DXFファイルの構造とルート自動判定<small>パーサ設計・条件分岐</small></h2>
+  </div>
+
+  <h3>DXF（Drawing Exchange Format）とは</h3>
+  <p>
+    AutoDesktopが1982年に策定したCADデータ交換フォーマット。
+    テキスト形式（ASCII）でエンティティ（直線・ポリライン・テキスト等）を列挙する。
+    <mark>グループコード</mark>と呼ばれる数値タグで型を識別する。
+  </p>
+
+<pre><code><span class="lang-label">DXF (抜粋)</span>
+  0        ← グループコード 0 = エンティティ型
+LINE       ← 直線
+  8        ← グループコード 8 = レイヤー名
+壁1階      ← CP932エンコードされたレイヤー名
+ 10        ← X座標 (始点)
+100.0
+ 20        ← Y座標 (始点)
+200.0</code></pre>
+
+  <h3>3種類のルート判定ロジック</h3>
+  <p>入力DXFの内容を分析して最適な変換ルートを自動選択する。</p>
+
+  <div class="diagram">
+    <div class="diagram-title">ルート自動判定フロー</div>
+    <div class="flow" style="flex-direction:column;align-items:flex-start;gap:0;text-align:left;max-width:560px;margin:0 auto;">
+      <div style="display:flex;align-items:center;gap:16px;padding:12px 0;width:100%;border-bottom:1px dotted #ddd;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;width:80px;color:#888;">POLYLINE<br>flags=0x40?</div>
+        <div style="font-size:18px;color:#ccc;">→</div>
+        <div class="flow-node blue">Route B<small>POLYFACE直接抽出</small></div>
+        <div style="font-size:12px;color:#888;margin-left:8px;">car.dxfはこれ<br>寸法誤差 = 0mm</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;padding:12px 0;width:100%;border-bottom:1px dotted #ddd;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;width:80px;color:#888;">壁レイヤー<br>あり + Z=0?</div>
+        <div style="font-size:18px;color:#ccc;">→</div>
+        <div class="flow-node red">Route C<small>建築平面図押し出し</small></div>
+        <div style="font-size:12px;color:#888;margin-left:8px;">2DDXF_Sample.dxf<br>v2: 5項目改善</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;padding:12px 0;width:100%;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;width:80px;color:#888;">その他</div>
+        <div style="font-size:18px;color:#ccc;">→</div>
+        <div class="flow-node green">Route A<small>押し出しFB + 推論</small></div>
+        <div style="font-size:12px;color:#888;margin-left:8px;">汎用2D図面<br>推論オプション</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>POLYFACE フラグの判定</h3>
+
+<pre><code><span class="lang-label">Python</span>
+<span class="k">def</span> _has_polyface(msp) -> <span class="k">bool</span>:
+    <span class="c"># DXFのPOLYLINEエンティティを走査</span>
+    <span class="k">for</span> e <span class="k">in</span> msp:
+        <span class="k">if</span> e.dxftype() == <span class="s">"POLYLINE"</span>:
+            <span class="c"># flags の 0x40 ビットが立っている = 3D POLYFACE メッシュ</span>
+            <span class="k">if</span> e.dxf.get(<span class="s">"flags"</span>, <span class="n">0</span>) & <span class="n">0x40</span>:
+                <span class="c"># Z値が0でない頂点があれば本物の3Dメッシュ</span>
+                z_vals = [v.dxf.location.z <span class="k">for</span> v <span class="k">in</span> list(e.vertices)[:<span class="n">20</span>]]
+                <span class="k">if</span> max(abs(z) <span class="k">for</span> z <span class="k">in</span> z_vals) > <span class="n">1e-6</span>:
+                    <span class="k">return True</span>
+    <span class="k">return False</span></code></pre>
+
+  <div class="quiz">
+    <div class="quiz-label">考えてみよう</div>
+    <p>なぜフラグのビット判定に <code>& 0x40</code>（AND演算）を使うのか？<br>flags は複数の状態を1つの整数で表現している（ビットフラグ）。0x40 = 64 = 0b01000000 のビットだけを抽出するため。</p>
+  </div>
+</div>
+
+<!-- ─── 03 ─── -->
+<div class="section" id="s3">
+  <div class="sec-header">
+    <div class="sec-num">03</div>
+    <h2>Zバッファによる隠線判定アルゴリズム<small>ラスタライズ・バリセントリック座標</small></h2>
+  </div>
+
+  <div class="box point">
+    <div class="box-label">この章の核心</div>
+    <p>GPUが毎フレーム行っていることを、<strong>numpy だけで再実装</strong>する。リアルタイムグラフィックスの根幹を理解する最良の演習。</p>
+  </div>
+
+  <h3>問題設定：どのエッジが「見える」か</h3>
+  <p>
+    3DモデルをCAD図面（三面図）に変換するとき、すべてのエッジを描くと内部の線まで見えてしまう。
+    「手前にあって見えるエッジ（実線）」と「奥にあって隠れているエッジ（破線）」を区別する必要がある。
+  </p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>手法</th><th>アイデア</th><th>問題点</th><th>VISIBLE比率</th></tr></thead>
+      <tbody>
+        <tr><td>v1: 深度中央値</td><td>エッジ深度の中央値より奥=隠線</td><td>メッシュ形状を無視した分類</td><td>0.1%</td></tr>
+        <tr><td>v2: 法線ベース</td><td>面法線が手前を向く=前面</td><td>曲面・自己遮蔽を扱えない</td><td>27.7%</td></tr>
+        <tr class="highlight"><td><strong>v3: Zバッファ</strong></td><td><strong>深度マップと比較</strong></td><td>（現行・最善）</td><td><strong>78.0%</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Step 1：バリセントリック座標法で三角形をラスタライズ</h3>
+  <p>
+    三角形の内部にあるピクセルを判定し、深度値を補間して書き込む処理。
+    これがZバッファ生成の中核。
+  </p>
+
+  <div class="formula">
+    w₀ = [(h₁-h₂)(gx-h₂) + (v₂-v₁)(gy-v₂)] / area<br>
+    w₁ = [(h₂-h₀)(gx-h₀) + (v₀-v₂)(gy-v₀)] / area<br>
+    w₂ = 1 - w₀ - w₁<br><br>
+    ピクセル(gx,gy)が三角形内部 ⟺ w₀≥0 ∧ w₁≥0 ∧ w₂≥0<br>
+    深度値 = w₀·d₀ + w₁·d₁ + w₂·d₂
+  </div>
+
+<pre><code><span class="lang-label">Python (numpy)</span>
+<span class="k">def</span> _build_zbuffer(verts, faces, ax_h, ax_v, ax_d, size=<span class="n">512</span>):
+    z_buf = np.full((size, size), np.inf, dtype=np.float32)
+    
+    <span class="k">for</span> face <span class="k">in</span> faces:
+        a, b, c = face
+        h0, h1, h2 = px_h[a], px_h[b], px_h[c]  <span class="c"># ピクセル座標</span>
+        v0, v1, v2 = px_v[a], px_v[b], px_v[c]
+        d0, d1, d2 = pts_d[a], pts_d[b], pts_d[c]  <span class="c"># 深度値</span>
+        
+        <span class="c"># バウンディングボックス（処理範囲を絞る）</span>
+        xmin, xmax = max(<span class="n">0</span>, int(min(h0,h1,h2))), min(size-<span class="n">1</span>, int(max(h0,h1,h2))+<span class="n">1</span>)
+        ymin, ymax = max(<span class="n">0</span>, int(min(v0,v1,v2))), min(size-<span class="n">1</span>, int(max(v0,v1,v2))+<span class="n">1</span>)
+        
+        <span class="c"># グリッド生成 → バリセントリック座標を一括計算</span>
+        gx, gy = np.meshgrid(np.arange(xmin, xmax), np.arange(ymin, ymax))
+        area = (h1-h0)*(v2-v0) - (h2-h0)*(v1-v0)
+        <span class="k">if</span> abs(area) < <span class="n">0.5</span>: <span class="k">continue</span>
+        
+        w0 = ((h1-h2)*(gx-h2) + (v2-v1)*(gy-v2)) / area
+        w1 = ((h2-h0)*(gx-h0) + (v0-v2)*(gy-v0)) / area
+        w2 = <span class="n">1.0</span> - w0 - w1
+        inside = (w0 >= -<span class="n">0.01</span>) & (w1 >= -<span class="n">0.01</span>) & (w2 >= -<span class="n">0.01</span>)
+        
+        <span class="c"># 深度補間 → Zバッファに書き込み（手前のみ更新）</span>
+        depth = w0*d0 + w1*d1 + w2*d2
+        z_buf[gy[inside], gx[inside]] = np.minimum(
+            z_buf[gy[inside], gx[inside]], depth[inside]
+        )
+    <span class="k">return</span> z_buf</code></pre>
+
+  <h3>Step 2：エッジの可視性判定</h3>
+  <p>
+    生成した深度マップを使って、各エッジが「手前にあるか」を判定する。
+    1点だと誤判定が多いので<mark>5点サンプリング</mark>して多数決を取る。
+  </p>
+
+<pre><code><span class="lang-label">Python</span>
+<span class="k">def</span> _edge_visibility_zbuffer(x0, y0, x1, y1, d0, d1, z_buf, params, n_samples=<span class="n">5</span>):
+    visible_votes = <span class="n">0</span>
+    
+    <span class="k">for</span> t <span class="k">in</span> np.linspace(<span class="n">0.1</span>, <span class="n">0.9</span>, n_samples):
+        <span class="c"># エッジをt:1-tで分割した点の座標・深度</span>
+        mx, my = x0 + t*(x1-x0), y0 + t*(y1-y0)
+        md = d0 + t*(d1-d0)
+        
+        <span class="c"># ピクセル座標に変換してZバッファを参照</span>
+        px = int(np.clip(mx * scale_h + off_h, <span class="n">0</span>, size-<span class="n">1</span>))
+        py = int(np.clip((<span class="n">1.0</span> - (my*scale_v+off_v)/size) * size, <span class="n">0</span>, size-<span class="n">1</span>))
+        
+        zbuf_depth = z_buf[py, px]
+        <span class="c"># エッジの深度 ≤ Zバッファの深度 + 許容誤差 → 可視</span>
+        <span class="k">if</span> zbuf_depth == np.inf <span class="k">or</span> md <= zbuf_depth + tol:
+            visible_votes += <span class="n">1</span>
+    
+    <span class="k">return</span> <span class="s">"visible"</span> <span class="k">if</span> visible_votes > n_samples // <span class="n">2</span> <span class="k">else</span> <span class="s">"hidden"</span></code></pre>
+
+  <div class="quiz">
+    <div class="quiz-label">考えてみよう</div>
+    <p>なぜ t=0 と t=1（端点）ではなく t=0.1〜0.9 でサンプリングするのか？<br>端点はちょうど別の面の境界に乗ることがあり、誤判定しやすい。中間点を使うことで安定する。</p>
+  </div>
+
+  <div class="box note">
+    <div class="box-label">性能について</div>
+    <p>
+      現実装は三角形ごとにforループを回すため<code>car.dxf（14,234面）</code>で約0.8秒かかる。
+      numpy の<code>np.frompyfunc</code>や<code>numba</code>を使えば10〜100倍高速化できる。
+      ゲームエンジンのレンダラはこれをGPUで毎秒60回以上やっている。
+    </p>
+  </div>
+</div>
+
+<!-- ─── 04 ─── -->
+<div class="section" id="s4">
+  <div class="sec-header">
+    <div class="sec-num">04</div>
+    <h2>文字コードの罠：CP932 Mojibake問題<small>エンコーディング・バイト列操作</small></h2>
+  </div>
+
+  <div class="box warn">
+    <div class="box-label">注意</div>
+    <p>
+      日本語を扱うシステムでは文字コードの問題が必ず出てくる。
+      この問題を解決した手法は他の日本語CADデータ処理でも応用できる。
+    </p>
+  </div>
+
+  <h3>問題の構造</h3>
+  <p>
+    日本語CADソフトはレイヤー名を <strong>CP932（Shift_JIS）</strong> でDXFに書き込む。<br>
+    しかし <code>ezdxf</code>（PythonのDXFライブラリ）は内部で <strong>cp1252</strong>（Windows西欧語）として読み込む。<br>
+    この不一致が <strong>Mojibake（文字化け）</strong> を引き起こす。
+  </p>
+
+  <div class="diagram">
+    <div class="diagram-title">「壁」という文字が化ける仕組み</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:2.2;text-align:left;max-width:500px;margin:0 auto;">
+      <div>「壁」 → CP932エンコード → <code style="color:#e74c3c;">0x95 0xC7</code></div>
+      <div style="padding-left:20px;color:#888;">↓ ezdxf が cp1252 として読む</div>
+      <div><code style="color:#e74c3c;">0x95</code> → cp1252 の <code style="color:#2980b9;">'•'</code>（U+2022 BULLET）</div>
+      <div><code style="color:#e74c3c;">0xC7</code> → cp1252 の <code style="color:#2980b9;">'Ç'</code>（U+00C7）</div>
+      <div>結果: ezdxf 内部では <code style="color:#2980b9;">"•Ç1階"</code> として保持される</div>
+    </div>
+  </div>
+
+  <h3>解決策：Mojibakeパターンを事前生成してマッチング</h3>
+  <p>
+    「壁」などのキーワードを <strong>CP932→cp1252 変換した文字列</strong> として保持しておき、
+    ezdxf が返す化けた文字列と直接比較する。
+  </p>
+
+<pre><code><span class="lang-label">Python</span>
+<span class="k">def</span> _cp932_moj(text: str) -> str:
+    <span class="s">"""CP932テキスト → ezdxf内部のcp1252 Mojibake文字列に変換"""</span>
+    b = text.encode(<span class="s">"cp932"</span>)          <span class="c"># バイト列に変換</span>
+    result = []
+    <span class="k">for</span> byte <span class="k">in</span> b:
+        <span class="k">if</span> <span class="n">0x80</span> <= byte <= <span class="n">0xFF</span>:       <span class="c"># 非ASCII領域</span>
+            <span class="k">try</span>:
+                result.append(bytes([byte]).decode(<span class="s">"cp1252"</span>))
+            <span class="k">except</span> ValueError:
+                <span class="c"># cp1252 未定義バイト(0x81等)はsurrogate文字に</span>
+                result.append(chr(<span class="n">0xDC00</span> + byte))
+        <span class="k">else</span>:
+            result.append(chr(byte))
+    <span class="k">return</span> <span class="s">""</span>.join(result)
+
+<span class="c"># 壁 → "•Ç" というMojibakeパターンを保持</span>
+_WALL_MOJ = [_cp932_moj(<span class="s">"壁"</span>)]    <span class="c"># → "•Ç"</span>
+
+<span class="c"># マッチング：ezdxfのraw文字列に含まれているか確認</span>
+<span class="k">def</span> _raw_match(raw: str, patterns: list) -> bool:
+    <span class="k">return</span> any(p <span class="k">and</span> p <span class="k">in</span> raw <span class="k">for</span> p <span class="k">in</span> patterns)</code></pre>
+
+  <h3>実際の分類結果</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>カテゴリ</th><th>ezdxf内部のレイヤー名</th><th>デコード後</th></tr></thead>
+      <tbody>
+        <tr><td>wall</td><td><code>•Ç1ŠK</code></td><td>壁1階</td></tr>
+        <tr><td>wall</td><td><code>•Ç2ŠK</code></td><td>壁2階</td></tr>
+        <tr><td>opening</td><td><code>ﾅ椎｡窶ｹﾃｯ1ﾅK</code></td><td>建具1階</td></tr>
+        <tr><td>ignore</td><td><code>ﾅﾃ版ｽﾃｦ窶堙ｨ1ﾅK</code></td><td>間取り1階</td></tr>
+        <tr><td>furniture</td><td><code>\udc90Ý"õ-‰Æ‹ï1ŠK</code></td><td>設備-家具1階</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="quiz">
+    <div class="quiz-label">考えてみよう</div>
+    <p>cp1252 で定義されていない <code>0x90</code> は <code>chr(0xDC00 + 0x90)</code> = <code>'\udc90'</code>（surrogate）になる。これはPythonでどう扱うべきか？ → <code>str.encode('utf-8', 'surrogateescape')</code> で元のバイト列を復元できる。</p>
+  </div>
+</div>
+
+<!-- ─── 05 ─── -->
+<div class="section" id="s5">
+  <div class="sec-header">
+    <div class="sec-num">05</div>
+    <h2>建築平面図の押し出し改善5項目<small>Union-Find・幾何演算・複数階積み上げ</small></h2>
+  </div>
+
+  <h3>① 端点スナップ：Union-Find アルゴリズム</h3>
+  <p>
+    建築CADの壁線分は接合点が数mm〜数十mmずれていることが多い。
+    そのまま押し出すと壁に隙間や浮きが生じる。
+    <strong>Union-Find</strong> で近接端点をグループ化して統合する。
+  </p>
+
+<pre><code><span class="lang-label">Union-Find の核心部分</span>
+<span class="c"># 全端点を配列として用意</span>
+pts = np.array([[s[0],s[1]] for s in segs] + [[s[2],s[3]] for s in segs])
+parent = list(range(len(pts)))
+
+<span class="k">def</span> find(x):           <span class="c"># パス圧縮付きfind</span>
+    <span class="k">while</span> parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    <span class="k">return</span> x
+
+<span class="c"># 80mm以内のペアを結合</span>
+<span class="k">for</span> i <span class="k">in</span> range(len(pts)):
+    <span class="k">for</span> j <span class="k">in</span> range(i+<span class="n">1</span>, len(pts)):
+        <span class="k">if</span> np.hypot(pts[i,<span class="n">0</span>]-pts[j,<span class="n">0</span>], pts[i,<span class="n">1</span>]-pts[j,<span class="n">1</span>]) < <span class="n">80.0</span>:
+            union(i, j)
+
+<span class="c"># クラスタの重心を代表点に → 線分を再構築</span></code></pre>
+
+  <h3>② 壁厚自動推定：平行線ペア検出</h3>
+  <p>
+    建築CADでは壁を2本の平行線で表現する慣習がある。
+    この性質を利用して実際の壁厚を推定する。
+  </p>
+
+  <div class="diagram">
+    <div class="diagram-title">平行線ペア検出の判定条件</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;text-align:left;font-size:13px;">
+      <div style="border:1px solid var(--border);padding:16px;border-radius:4px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:8px;">条件1: 角度差</div>
+        角度差 &lt; 30°<br>
+        <span style="color:var(--muted);">ほぼ平行な線分</span>
+      </div>
+      <div style="border:1px solid var(--border);padding:16px;border-radius:4px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:8px;">条件2: 垂直距離</div>
+        80mm〜500mm<br>
+        <span style="color:var(--muted);">壁厚として妥当な範囲</span>
+      </div>
+      <div style="border:1px solid #27ae60;padding:16px;border-radius:4px;background:#f4faf6;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#27ae60;margin-bottom:8px;">推定結果</div>
+        <strong>中央値 = 壁厚</strong><br>
+        <span style="color:var(--muted);">実測: 150mm→100mm</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>③ 開口部の高さ分類</h3>
+  <p>建具（ドア・窓）を線分長さで分類し、それぞれ適切な高さで壁を切り抜く。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>種別</th><th>判定条件</th><th>切り抜き高さ</th></tr></thead>
+      <tbody>
+        <tr><td>ドア</td><td>線分長 ≥ 900mm</td><td>床(0mm) 〜 2000mm</td></tr>
+        <tr><td>窓</td><td>線分長 &lt; 900mm</td><td>900mm 〜 2000mm</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>④ 複数階の積み上げ</h3>
+  <p>
+    レイヤー名から<code>1階</code>/<code>2階</code>を検出して、別々のZ座標に配置する。
+  </p>
+
+  <div class="diagram">
+    <div class="diagram-title">2階建て住宅の積み上げ構造</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-align:left;max-width:300px;margin:0 auto;">
+      <div style="height:30px;background:#e8f4f8;border:1px solid #2980b9;display:flex;align-items:center;padding:0 12px;">天井スラブ  Z=5.5〜5.65m</div>
+      <div style="height:50px;background:#f4f8fd;border:1px solid #2980b9;display:flex;align-items:center;padding:0 12px;">壁2階（97本）  Z=3.0〜5.5m</div>
+      <div style="height:20px;background:#eee;border:1px solid #ccc;display:flex;align-items:center;padding:0 12px;font-size:10px;">天井スラブ  Z=2.5〜2.65m</div>
+      <div style="height:50px;background:#fdf5f4;border:1px solid #e74c3c;display:flex;align-items:center;padding:0 12px;">壁1階（61本）  Z=0〜2.5m</div>
+      <div style="height:20px;background:#555;border:1px solid #333;display:flex;align-items:center;padding:0 12px;color:white;">床スラブ  Z=-0.2〜0m</div>
+    </div>
+  </div>
+
+  <h3>⑤ 天井スラブ</h3>
+  <p>各階の天井に150mm厚のスラブを追加することで、建物としてのリアリティを向上させる。</p>
+
+  <div class="box tip">
+    <div class="box-label">設計上のトレードオフ</div>
+    <p>
+      ブーリアン Union（<code>--use-union</code>）を有効にすると壁同士の重なりが解消されてきれいになるが、
+      処理時間が大幅に増加する。デフォルトは無効にして concatanate（単純結合）を使っている。
+      ゲームアセットとしては多少の重なりがあっても実用上問題ないという判断。
+    </p>
+  </div>
+</div>
+
+<!-- ─── 06 ─── -->
+<div class="section" id="s6">
+  <div class="sec-header">
+    <div class="sec-num">06</div>
+    <h2>GPU推論パイプラインの設計と限界<small>TripoSR・Zero123++・TSDF Fusion</small></h2>
+  </div>
+
+  <div class="box warn">
+    <div class="box-label">重要な設計判断</div>
+    <p>
+      この章では<strong>「試みて失敗した方法」</strong>と<strong>「なぜ方針を変えたか」</strong>を詳しく説明する。
+      技術選択の判断プロセスはエンジニアとして最も重要なスキル。
+    </p>
+  </div>
+
+  <h3>当初のアプローチ：Zero123++ + TSDF Fusion</h3>
+
+  <div class="flow" style="justify-content:flex-start;">
+    <div class="flow-node">押し出しメッシュ</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">レンダリング</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node blue">Zero123++<small>6視点生成</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">深度推定</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node red">TSDF Fusion<small>❌失敗</small></div>
+  </div>
+
+  <p style="margin-top:16px;">
+    <strong>失敗の原因</strong>：TSDF Fusion はカメラ姿勢（外部パラメータ）が正確でないと
+    正しいメッシュを再構成できない。Zero123++ が出力する6視点の画像と、
+    TSDF に渡すカメラ行列が一致していなかった。結果は花びら状のノイズ。
+  </p>
+
+  <h3>TripoSR への切り替え</h3>
+  <p>
+    TSDF を完全に廃止し、<strong>単視点画像から直接メッシュを出力</strong>する TripoSR を採用。
+    Transformer ベースで中間表現を経由せずメッシュを生成するため、
+    カメラ姿勢問題は原理的に発生しない。
+  </p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>モデル</th><th>仕組み</th><th>建物への適性</th><th>VRAM</th></tr></thead>
+      <tbody>
+        <tr><td>Zero123++ + TSDF</td><td>多視点生成→点群再構成</td><td>❌ カメラ姿勢問題</td><td>8GB</td></tr>
+        <tr><td>TripoSR</td><td>単視点→直接メッシュ</td><td>△ 学習分布のズレ</td><td>6GB</td></tr>
+        <tr class="highlight"><td><strong>押し出し（現行）</strong></td><td>アルゴリズム処理</td><td>✅ 寸法精度100%</td><td>不使用</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>学習分布のズレという根本問題</h3>
+  <p>
+    TripoSR・Zero123++ はどちらも「自然物・製品の写真」で学習されている。
+    建築平面図から生成したシルエット画像は、学習データとは大きくかけ離れており、
+    どんな高品質モデルでも期待通りの出力は得にくい。
+  </p>
+
+  <div class="box note">
+    <div class="box-label">建築特化モデルの現状調査</div>
+    <ul>
+      <li><strong>HouseCrafter（2024）</strong>：最高品質だがコード非公開</li>
+      <li><strong>Plan2Scene（2021・CVPR）</strong>：写真も必要でDXF単体入力に非対応</li>
+      <li><strong>FloorPlanTo3D</strong>：品質が押し出し改善版と大差なし</li>
+    </ul>
+    <p style="margin-top:12px;">
+      → 「汎用推論モデル」より「ドメイン特化アルゴリズム」の方がゲームアセットとして価値が高いと判断。
+    </p>
+  </div>
+
+  <div class="quiz">
+    <div class="quiz-label">考えてみよう</div>
+    <p>
+      推論結果が悪くても「推論あり」オプションを残している理由は何か？<br>
+      → 将来的により良いモデルが公開された時に差し替えられる拡張性のため。
+      <code>--infer --model triposr</code> のように選択できる設計にしておくと、モデルの入れ替えがコードの変更なしにできる。
+    </p>
+  </div>
+</div>
+
+<!-- ─── 07 ─── -->
+<div class="section" id="s7">
+  <div class="sec-header">
+    <div class="sec-num">07</div>
+    <h2>精度評価と設計判断の考え方<small>定量評価・トレードオフ・実務での視点</small></h2>
+  </div>
+
+  <h3>定量評価の重要性</h3>
+  <p>
+    「なんとなくよくなった」ではなく、<strong>数字で語れる改善</strong>がエンジニアの仕事。
+    このプロジェクトで測定した主要な指標を振り返る。
+  </p>
+
+  <h3>隠線判定精度の改善</h3>
+  <div class="progress-row">
+    <div class="progress-label">v1</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:.1%;background:#e74c3c;"></div></div>
+    <div class="progress-val">0.1%</div>
+  </div>
+  <div class="progress-row">
+    <div class="progress-label">v2</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:27.7%;background:#e67e22;"></div></div>
+    <div class="progress-val">27.7%</div>
+  </div>
+  <div class="progress-row">
+    <div class="progress-label">v3（現行）</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:78%;background:#27ae60;"></div></div>
+    <div class="progress-val">78.0%</div>
+  </div>
+
+  <h3>寸法精度（DXF → OBJ、car.dxf 実測）</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>軸</th><th>元DXF</th><th>生成OBJ</th><th>誤差</th></tr></thead>
+      <tbody>
+        <tr class="highlight"><td>幅（X）</td><td>2160.0mm</td><td>2160.0mm</td><td><strong>0.0mm</strong></td></tr>
+        <tr class="highlight"><td>奥行（Y）</td><td>4853.0mm</td><td>4853.0mm</td><td><strong>0.0mm</strong></td></tr>
+        <tr class="highlight"><td>高さ（Z）</td><td>1702.0mm</td><td>1702.0mm</td><td><strong>0.0mm</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>実務での設計判断：3つの原則</h3>
+
+  <div class="box point">
+    <div class="box-label">原則1: 測ってから判断する</div>
+    <p>「たぶん改善した」ではなく数字を出す。隠線判定は 0.1% → 27.7% → 78% と段階的に改善を追跡した。</p>
+  </div>
+  <div class="box note">
+    <div class="box-label">原則2: フォールバックを用意する</div>
+    <p>新機能（ブーリアン Union、推論）が失敗しても基本機能（concatenate、押し出しのみ）で動き続けるようにする。</p>
+  </div>
+  <div class="box tip">
+    <div class="box-label">原則3: 技術より目的を優先する</div>
+    <p>「最新のAIモデルを使うこと」が目的ではない。「ゲームアセットとして使える品質」が目的。アルゴリズムの方が目的に合致するなら迷わずそちらを選ぶ。</p>
+  </div>
+
+  <h3>今後の改善方向</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>項目</th><th>現状</th><th>改善案</th></tr></thead>
+      <tbody>
+        <tr><td>Zバッファ速度</td><td>~18秒/モデル</td><td>numba JIT または CUDA化で100倍高速化可能</td></tr>
+        <tr><td>テクスチャ品質</td><td>手続き的生成</td><td>AI生成テクスチャ（TEXTure3D等）との統合</td></tr>
+        <tr><td>屋根形状</td><td>3種類</td><td>寄棟・入母屋の実装（Shapely演算で対応可）</td></tr>
+        <tr><td>FBX対応</td><td>Blender経由</td><td>Assimp DLL配布でネイティブ対応</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <hr>
+
+  <div class="box tip">
+    <div class="box-label">まとめ</div>
+    <ul>
+      <li>DXFは<strong>グループコードとエンティティ型</strong>で構成されたシンプルなテキスト形式</li>
+      <li>Zバッファは<strong>リアルタイムCGの基礎技術</strong>を numpy で再実装したもの</li>
+      <li>CP932問題は<strong>バイト列レベルでの理解</strong>がないと解決できない</li>
+      <li>Union-Find は<strong>グラフ理論の実用的応用</strong>（座標統合にも使える）</li>
+      <li>AI推論より<strong>ドメイン特化アルゴリズム</strong>が勝ることがある</li>
+    </ul>
+  </div>
+
+</div>
+
+</div><!-- /page -->
+
+<script>
+// セクションのスクロールハイライト
+const sections = document.querySelectorAll('.section');
+const navLinks = document.querySelectorAll('.nav-bar a');
+window.addEventListener('scroll', () => {
+  let cur = '';
+  sections.forEach(s => {
+    if (window.scrollY >= s.offsetTop - 80) cur = s.id;
+  });
+  navLinks.forEach(a => {
+    a.style.color = a.getAttribute('href') === '#'+cur ? 'white' : '#aaa';
+  });
+});
+</script>
+</body>
+</html>
