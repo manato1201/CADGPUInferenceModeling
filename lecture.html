@@ -404,6 +404,7 @@ hr {
   <a href="#s5">05 押し出し改善</a>
   <a href="#s6">06 GPU推論</a>
   <a href="#s7">07 精度・設計</a>
+  <a href="#s8">08 性能改善実践</a>
 </nav>
 
 <!-- COVER -->
@@ -440,6 +441,7 @@ hr {
     <li><a href="#s5">建築平面図の押し出し改善5項目</a><span class="dots"></span></li>
     <li><a href="#s6">GPU推論パイプラインの設計と限界</a><span class="dots"></span></li>
     <li><a href="#s7">精度評価・設計判断の考え方</a><span class="dots"></span></li>
+    <li><a href="#s8">性能改善の実践：想定と実測のギャップ</a><span class="dots"></span></li>
   </ol>
 </div>
 
@@ -986,9 +988,14 @@ parent = list(range(len(pts)))
     <div class="progress-val">27.7%</div>
   </div>
   <div class="progress-row">
-    <div class="progress-label">v3（現行）</div>
-    <div class="progress-bar"><div class="progress-fill" style="width:78%;background:#27ae60;"></div></div>
-    <div class="progress-val">78.0%</div>
+    <div class="progress-label">v3</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:79.1%;background:#27ae60;"></div></div>
+    <div class="progress-val">79.1%</div>
+  </div>
+  <div class="progress-row">
+    <div class="progress-label">v4（現行）</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:80.5%;background:#27ae60;"></div></div>
+    <div class="progress-val">80.5%</div>
   </div>
 
   <h3>寸法精度（DXF → OBJ、car.dxf 実測）</h3>
@@ -1023,12 +1030,74 @@ parent = list(range(len(pts)))
     <table>
       <thead><tr><th>項目</th><th>現状</th><th>改善案</th></tr></thead>
       <tbody>
-        <tr><td>Zバッファ速度</td><td>~18秒/モデル</td><td>numba JIT または CUDA化で100倍高速化可能</td></tr>
+        <tr><td>Zバッファ速度</td><td>ラスタライズはnumba JIT化済み（約20倍）</td><td>→ 08章参照。真因はエッジ判定ループ・ezdxf書き出しと判明、そちらの最適化が次の課題</td></tr>
         <tr><td>テクスチャ品質</td><td>手続き的生成</td><td>AI生成テクスチャ（TEXTure3D等）との統合</td></tr>
         <tr><td>屋根形状</td><td>3種類</td><td>寄棟・入母屋の実装（Shapely演算で対応可）</td></tr>
         <tr><td>FBX対応</td><td>Blender経由</td><td>Assimp DLL配布でネイティブ対応</td></tr>
       </tbody>
     </table>
+  </div>
+
+
+</div>
+
+<!-- ─── 08 ─── -->
+<div class="section" id="s8">
+  <div class="sec-header">
+    <div class="sec-num">08</div>
+    <h2>性能改善の実践：想定と実測のギャップ<small>評価ハーネス・プロファイリング・独立レビューの重要性</small></h2>
+  </div>
+
+  <p>
+    機能が一通り完成した後、<strong>「性能・保守性の改善」</strong>という別の課題に取り組んだ。
+    ここで得られた最大の教訓は、<strong>「プロファイリングなしのボトルネック予測は、経験豊富なエンジニアでも高確率で外れる」</strong>
+    という、地味だが実務で極めて重要な事実だった。
+  </p>
+
+  <h3>進め方：計測してから最適化する</h3>
+  <p>
+    まず<code>tests/test_accuracy.py</code>（寸法精度・可視率の回帰テスト）と
+    <code>tests/bench.py</code>（処理時間の計測ベースライン）を作り、既存の「正しい」出力を固定した。
+    その後6フェーズの改善を「実装 → 独立レビューで検証 → 検証済みのみコミット」の順で進めた。
+  </p>
+
+  <h3>当初の仮説 vs 実測結果</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>フェーズ</th><th>当初の仮説（Phase 0分析）</th><th>実測結果</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>端点スナップ</td>
+          <td>全端点ペアを二重ループで距離判定するO(N²)が、建築図面の押し出し処理の主要ボトルネック</td>
+          <td>scipyの<code>cKDTree.query_pairs</code>でO(N log N)化したが、実測では<strong>スナップ処理自体が0.0025秒</strong>と誤差レベル。真因は開口部カットの<code>trimesh.boolean.difference</code>（処理時間の大半を占有）</td>
+        </tr>
+        <tr>
+          <td>Zバッファ隠線判定</td>
+          <td>ラスタライズ内ループをnumba njit化すれば、隠線判定全体が18秒→4秒に高速化される</td>
+          <td>ラスタライズ単体は<strong>約20倍高速化</strong>（5万頂点超メッシュで4.1秒→0.2秒）。しかし変換全体の所要時間はほぼ変わらず。真因はエッジ可視性判定のPythonループ（40万本超）とezdxf書き出しだった</td>
+        </tr>
+        <tr>
+          <td>壁厚推定に応じた動的スナップ許容差</td>
+          <td>推定壁厚の±5%を端点スナップの許容差にすれば、誤結合（違う壁同士が誤って繋がる）が減る</td>
+          <td>独立レビューが実測したところ、下限10mmでは<strong>端点未統合（隙間残存）が155本中43本で発生</strong>するリグレッションを検出。壁の隙間解消というスナップ本来の目的に反するため<strong>採用を見送り、固定値に差し戻した</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>実務での設計判断：3つの追加原則</h3>
+
+  <div class="box point">
+    <div class="box-label">原則4: 最適化の前に評価ハーネスを作る</div>
+    <p>「速くなったはず」を主観で語らない。テストと計測スクリプトを最初に用意し、変更の前後で同じ指標を比較できる状態を作ってから着手する。</p>
+  </div>
+  <div class="box warn">
+    <div class="box-label">原則5: 「理屈上良さそう」でも実測の裏付けがなければ採用しない</div>
+    <p>動的スナップ許容差は理論上は誤結合を減らすはずだったが、実測では別の副作用（隙間残存）が大きかった。アイデアの筋の良さと、実際の効果は別物として扱う。</p>
+  </div>
+  <div class="box tip">
+    <div class="box-label">原則6: 自分の実装を自分でレビューしない</div>
+    <p>実装者と検証者を分離し、検証者が独立に再実測・再検証する体制にすることで、実装者の思い込み（「たぶん動いている」）をすり抜けさせない。</p>
   </div>
 
   <hr>
@@ -1041,6 +1110,7 @@ parent = list(range(len(pts)))
       <li>CP932問題は<strong>バイト列レベルでの理解</strong>がないと解決できない</li>
       <li>Union-Find は<strong>グラフ理論の実用的応用</strong>（座標統合にも使える）</li>
       <li>AI推論より<strong>ドメイン特化アルゴリズム</strong>が勝ることがある</li>
+      <li>性能改善は<strong>計測が先、最適化が後</strong>。想定したボトルネックは高確率で外れる</li>
     </ul>
   </div>
 
