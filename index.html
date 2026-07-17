@@ -481,16 +481,16 @@
         <div class="metric-label">寸法保存精度<br>DXF → OBJ → DXF</div>
       </div>
       <div class="metric-card c2">
-        <div class="metric-val">78%</div>
-        <div class="metric-label">可視エッジ検出率<br>Zバッファ法（v3）</div>
+        <div class="metric-val">80.5%</div>
+        <div class="metric-label">可視エッジ検出率<br>Zバッファ法（v4・numba高速化）</div>
       </div>
       <div class="metric-card c3">
         <div class="metric-val">5.65m</div>
         <div class="metric-label">2階建て再現高さ<br>1階+2階を自動積み上げ</div>
       </div>
       <div class="metric-card c4">
-        <div class="metric-val">~10s</div>
-        <div class="metric-label">押し出し処理時間<br>GPU不使用・純粋CPU</div>
+        <div class="metric-val">20×</div>
+        <div class="metric-label">Zバッファ高速化<br>numba njitコンパイル（5万頂点）</div>
       </div>
     </div>
 
@@ -517,7 +517,8 @@
         <tbody>
           <tr><td>v1</td><td>深度中央値による単純分類</td><td><span class="badge badge-amber">0.1%</span></td><td>ほぼ全エッジが隠線判定</td></tr>
           <tr><td>v2</td><td>面法線による前面/背面判定</td><td><span class="badge badge-amber">27.7%</span></td><td>曲面での誤判定が多い</td></tr>
-          <tr><td><strong>v3（現行）</strong></td><td><strong>Zバッファ深度画像（512×512）</strong></td><td><span class="badge badge-green">78.0%</span></td><td>遮蔽関係を画素単位で判定</td></tr>
+          <tr><td>v3</td><td>Zバッファ深度画像（512×512、numpy）</td><td><span class="badge badge-cyan">79.1%</span></td><td>遮蔽関係を画素単位で判定</td></tr>
+          <tr><td><strong>v4（現行）</strong></td><td><strong>Zバッファ深度画像（1024×1024、numba njit）</strong></td><td><span class="badge badge-green">80.5%</span></td><td>解像度向上 + ラスタライズ約20倍高速化</td></tr>
         </tbody>
       </table>
     </div>
@@ -781,11 +782,18 @@ _FLOOR2_MOJ = [_cp932_moj(<span class="code-string">"2階"</span>)]  <span class
           <div class="tl-desc">① Union-Find端点スナップ ② 平行線ペアによる壁厚自動推定 ③ ドア/窓の高さ分類切り抜き ④ 複数階の自動積み上げ ⑤ 天井スラブ追加。2階建て建物の正確な再現に成功。</div>
         </div>
       </div>
-      <div class="tl-item active">
+      <div class="tl-item">
         <div class="tl-ver">v2.0</div>
         <div class="tl-body">
           <div class="tl-title">Zバッファ隠線判定 + 双方向変換の完成</div>
           <div class="tl-desc">OBJ→DXF変換でVISIBLE比率 0.1% → 78% に改善。法線ベース → Zバッファ深度画像ベースへの手法転換。GPU不使用・numpy のみでバリセントリック座標法のラスタライザを自前実装。</div>
+        </div>
+      </div>
+      <div class="tl-item active">
+        <div class="tl-ver">v3.0</div>
+        <div class="tl-body">
+          <div class="tl-title">評価ハーネス駆動の性能・保守性改善（6フェーズ）</div>
+          <div class="tl-desc">pytest回帰テスト・計測ベースラインを最初に構築し、モデルのシングルトン化・端点スナップのcKDTree化・Zバッファのnumba njit化(約20倍高速化)・精度チューニング・APIエラー分類とタイムアウト対応を実施。各フェーズを独立レビューで検証し、実測でリグレッションが確認された変更（wall_snap_tolの動的化）は差し戻した。「想定したボトルネックが実測では的外れだった」複数のケースを検出・記録。</div>
         </div>
       </div>
     </div>
@@ -855,6 +863,54 @@ python cli.py export model.obj --no-hidden
 <span class="code-comment"># FBX は事前にOBJへ変換</span>
 python fbx2obj.py model.fbx
 python cli.py export model.obj</code></pre>
+  </div>
+</section>
+
+<!-- PERFORMANCE ENGINEERING -->
+<section>
+  <div class="wrap reveal">
+    <div class="section-label">07 — Performance Engineering</div>
+    <h2>評価ハーネス駆動の性能改善</h2>
+    <p style="color:var(--muted);max-width:720px;margin-bottom:24px;">
+      「実装 → 独立レビューによる検証 → 検証済みのみコミット」というプロセスで
+      6フェーズの改善を実施。プロファイリングなしの直感的なボトルネック予測がしばしば外れることを
+      実測で確認し、リグレッションが確認された変更は差し戻した。
+    </p>
+
+    <h3>確実に達成した改善</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>フェーズ</th><th>改善内容</th><th>実測結果</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Phase 2</td><td>モデル多重ロードの解消</td><td>APIリクエストごとのTripoSR/Zero123++再ロードを構造的に防止</td></tr>
+          <tr><td>Phase 4</td><td>Zバッファラスタライズのnumba化</td><td><span class="badge badge-green">約20倍高速化</span>（5万頂点超メッシュ）</td></tr>
+          <tr><td>Phase 5</td><td>可視率の実測ベース改善</td><td><span class="badge badge-green">79.1% → 80.5%</span>（zbuf_size 512→1024）</td></tr>
+          <tr><td>Phase 6</td><td>APIの障害耐性向上</td><td>エラー分類・タイムアウト検出・ジョブストアのメモリリーク防止</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>想定と実測が食い違った発見</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>フェーズ</th><th>当初の想定</th><th>実測結果</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Phase 3</td><td>端点スナップのO(N²)が押し出しのボトルネック</td><td>スナップ自体は0.0025秒。真因は開口部カットのブーリアン演算</td></tr>
+          <tr><td>Phase 4</td><td>ラスタライズのnumba化で隠線判定全体が高速化</td><td>ラスタライズ単体は20倍高速化も、真因はエッジ判定ループとezdxf書き出し</td></tr>
+          <tr><td>Phase 5</td><td>wall_snap_tolの動的化で誤結合が減る</td><td><span class="badge badge-amber">リグレッション検出、差し戻し</span>（端点未統合が155本中43本で発生）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="color:var(--muted);max-width:720px;margin-top:20px;border-left:2px solid var(--accent);padding-left:16px;">
+      評価ハーネス（テスト・計測ベースライン）を最初に構築し、実測と独立レビューを
+      徹底したことで、効果のない変更・リグレッションを本番投入前に検出できた。
+      詳細は <code>docs/PERF_RESULTS.md</code> / <code>overview.md</code> を参照。
+    </p>
   </div>
 </section>
 

@@ -12,6 +12,16 @@ OBJ / FBX / GLB → Zバッファ隠線判定 → 三面図 + 平面図 → DXF
 
 動作確認済み環境: Windows 11 / NVIDIA GeForce RTX 3070 (8.6GB VRAM) / Python 3.12
 
+**関連ドキュメント**
+
+| ドキュメント | 内容 |
+|---|---|
+| [overview.md](overview.md) | 技術資料。アーキテクチャ・コアアルゴリズムをMermaid図付きで解説 |
+| [docs/PERF_RESULTS.md](docs/PERF_RESULTS.md) | 性能改善の実測結果サマリー |
+| [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) | 性能・保守性改善の実施計画（フェーズ別） |
+| `index.html` | ポートフォリオ用HTML（成果サマリー・技術ハイライト） |
+| `lecture.html` | 講義資料（設計判断・トラブルシューティングの解説付き） |
+
 ---
 
 
