@@ -51,6 +51,7 @@ CADGPUInferenceModeling/
 ```
 
 ```mermaid
+%%{init: {"theme":"base","fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","themeVariables":{"fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","primaryColor":"#ffffff","primaryBorderColor":"#d0d5dd","primaryTextColor":"#101828","lineColor":"#667085","clusterBkg":"#f2f4f7","clusterBorder":"#d0d5dd","edgeLabelBackground":"#ffffff"},"flowchart":{"wrappingWidth":480,"nodeSpacing":40,"rankSpacing":56,"padding":14},"sequence":{"mirrorActors":false,"wrap":false,"width":150,"actorMargin":30,"messageMargin":34}}}%%
 flowchart LR
     subgraph Input["入力"]
         DXF[("DXFファイル")]
@@ -83,6 +84,7 @@ flowchart LR
 入力 DXF の種類を解析し、最適なルートで処理する。
 
 ```mermaid
+%%{init: {"theme":"base","fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","themeVariables":{"fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","primaryColor":"#ffffff","primaryBorderColor":"#d0d5dd","primaryTextColor":"#101828","lineColor":"#667085","clusterBkg":"#f2f4f7","clusterBorder":"#d0d5dd","edgeLabelBackground":"#ffffff"},"flowchart":{"wrappingWidth":480,"nodeSpacing":40,"rankSpacing":56,"padding":14},"sequence":{"mirrorActors":false,"wrap":false,"width":150,"actorMargin":30,"messageMargin":34}}}%%
 flowchart TD
     Start(["DXF 読み込み"]) --> Check{"ルート判定"}
 
@@ -116,6 +118,7 @@ GPU不使用・numpy のみでバリセントリック座標法を実装。
 **処理フロー:**
 
 ```mermaid
+%%{init: {"theme":"base","fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","themeVariables":{"fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","primaryColor":"#ffffff","primaryBorderColor":"#d0d5dd","primaryTextColor":"#101828","lineColor":"#667085","clusterBkg":"#f2f4f7","clusterBorder":"#d0d5dd","edgeLabelBackground":"#ffffff"},"flowchart":{"wrappingWidth":480,"nodeSpacing":40,"rankSpacing":56,"padding":14},"sequence":{"mirrorActors":false,"wrap":false,"width":150,"actorMargin":30,"messageMargin":34}}}%%
 sequenceDiagram
     participant M as メッシュ(verts, faces)
     participant Z as Zバッファ(1024×1024)
@@ -215,6 +218,7 @@ _FLOOR2_MOJ = [_cp932_moj("2階")]  # → Z = 3000〜5500mm
 80mm以内の近接端点をクラスタリングして重心に統合する。
 
 ```mermaid
+%%{init: {"theme":"base","fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","themeVariables":{"fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","primaryColor":"#ffffff","primaryBorderColor":"#d0d5dd","primaryTextColor":"#101828","lineColor":"#667085","clusterBkg":"#f2f4f7","clusterBorder":"#d0d5dd","edgeLabelBackground":"#ffffff"},"flowchart":{"wrappingWidth":480,"nodeSpacing":40,"rankSpacing":56,"padding":14},"sequence":{"mirrorActors":false,"wrap":false,"width":150,"actorMargin":30,"messageMargin":34}}}%%
 flowchart LR
     A["全端点を収集<br/>(N点)"] --> B["scipy.spatial.cKDTree<br/>.query_pairs(r=tol)<br/>O(N log N)"]
     B --> C["Union-Find で<br/>ペアを結合"]
@@ -234,6 +238,7 @@ flowchart LR
 建築CADの壁は2本の平行線で表現される慣習を利用。
 
 ```mermaid
+%%{init: {"theme":"base","fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","themeVariables":{"fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","primaryColor":"#ffffff","primaryBorderColor":"#d0d5dd","primaryTextColor":"#101828","lineColor":"#667085","clusterBkg":"#f2f4f7","clusterBorder":"#d0d5dd","edgeLabelBackground":"#ffffff"},"flowchart":{"wrappingWidth":480,"nodeSpacing":40,"rankSpacing":56,"padding":14},"sequence":{"mirrorActors":false,"wrap":false,"width":150,"actorMargin":30,"messageMargin":34}}}%%
 flowchart LR
     A["各線分の角度・中点を計算"] --> B["角度差 < 30° かつ<br/>垂直距離 80〜500mmの<br/>ペアを検出"]
     B --> C["IQR×1.5ルールで<br/>外れ値を除外"]
@@ -295,6 +300,7 @@ flowchart LR
 各フェーズは「実装 → 独立レビューによる検証 → 検証済みのみコミット」のプロセスで進めた。
 
 ```mermaid
+%%{init: {"theme":"base","fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","themeVariables":{"fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","primaryColor":"#ffffff","primaryBorderColor":"#d0d5dd","primaryTextColor":"#101828","lineColor":"#667085","clusterBkg":"#f2f4f7","clusterBorder":"#d0d5dd","edgeLabelBackground":"#ffffff"},"flowchart":{"wrappingWidth":480,"nodeSpacing":40,"rankSpacing":56,"padding":14},"sequence":{"mirrorActors":false,"wrap":false,"width":150,"actorMargin":30,"messageMargin":34}}}%%
 flowchart TD
     P1["Phase 1<br/>テスト・評価ハーネス構築<br/>tests/test_accuracy.py, bench.py"] --> P2
     P2["Phase 2<br/>モデルロードのシングルトン化<br/>get_inferencer()ファクトリ"] --> P3
@@ -399,6 +405,7 @@ python tests/bench.py
 ### API サーバー
 
 ```mermaid
+%%{init: {"theme":"base","fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","themeVariables":{"fontFamily":"Noto Sans JP, Hiragino Sans, Meiryo, sans-serif","primaryColor":"#ffffff","primaryBorderColor":"#d0d5dd","primaryTextColor":"#101828","lineColor":"#667085","clusterBkg":"#f2f4f7","clusterBorder":"#d0d5dd","edgeLabelBackground":"#ffffff"},"flowchart":{"wrappingWidth":480,"nodeSpacing":40,"rankSpacing":56,"padding":14},"sequence":{"mirrorActors":false,"wrap":false,"width":150,"actorMargin":30,"messageMargin":34}}}%%
 sequenceDiagram
     participant C as クライアント
     participant API as api.py (FastAPI)
