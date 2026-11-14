@@ -457,14 +457,8 @@ def _cut_opening_typed(
         process=False,
     )
 
-    for engine in ("manifold", "blender"):
-        try:
-            result = trimesh.boolean.difference([wall_mesh, cutter], engine=engine)
-            if result is not None and len(result.faces) > 0:
-                return result
-        except Exception:
-            pass
-    return wall_mesh
+    result = _boolean("difference", [wall_mesh, cutter])
+    return result if result is not None else wall_mesh
 
 
 # ─────────────────────────────────────────────
@@ -555,6 +549,57 @@ def repair_mesh(mesh):
     return mesh
 
 
+def _boolean(operation: str, meshes: list):
+    """メッシュのブーリアン演算("difference" / "union")。
+
+    trimesh 4.0.x の "manifold" エンジンは、manifold3d 3.x の API 変更
+    (``Manifold.from_mesh`` の廃止)で毎回失敗し、そのたびに Blender を起動していた
+    (開口 1 つに約 1.2 秒)。そのため manifold3d を直接呼ぶ。
+    失敗したときだけ、trimesh のエンジン("manifold" → "blender")に戻る。
+    """
+    import trimesh
+
+    try:
+        import manifold3d as m3d
+
+        parts = []
+        for mesh in meshes:
+            faces = np.asarray(mesh.faces, dtype=np.int64)
+            if float(mesh.volume) < 0:  # 面の向きが裏返し(押し出し・カッターが該当)。manifold3d は表向きを要求する
+                faces = faces[:, ::-1]
+            parts.append(m3d.Manifold(m3d.Mesh64(
+                vert_properties=np.array(mesh.vertices, dtype=np.float64, order="C"),
+                tri_verts=np.array(faces, dtype=np.uint64, order="C"),
+            )))
+        if any(p.status() != m3d.Error.NoError for p in parts):
+            raise ValueError("manifold3d: 入力が閉じた多様体でない")
+        if operation == "difference":
+            out = parts[0]
+            for sub in parts[1:]:
+                out = out - sub
+        else:
+            out = m3d.Manifold.batch_boolean(parts, m3d.OpType.Add)
+        result = out.to_mesh64()
+        if len(result.tri_verts) > 0:
+            return trimesh.Trimesh(
+                vertices=np.array(result.vert_properties, dtype=np.float64)[:, :3].copy(),
+                faces=np.array(result.tri_verts, dtype=np.int64),
+                process=False,
+            )
+    except Exception as exc:  # manifold3d が無い・入力が不正 など
+        logger.debug("manifold3d の直接呼び出しに失敗。trimesh のエンジンに戻る: %s", exc)
+
+    fn = trimesh.boolean.difference if operation == "difference" else trimesh.boolean.union
+    for engine in ("manifold", "blender"):
+        try:
+            result = fn(meshes, engine=engine)
+            if result is not None and len(result.faces) > 0:
+                return result
+        except Exception:
+            pass
+    return None
+
+
 def _union_meshes(meshes: list, batch_size: int = 48):
     import trimesh
     if not meshes:
@@ -567,27 +612,16 @@ def _union_meshes(meshes: list, batch_size: int = 48):
     batch_results = []
     for bi, batch in enumerate(batches):
         merged = trimesh.util.concatenate(batch)
-        for engine in ("manifold", "blender"):
-            try:
-                result = trimesh.boolean.union(batch, engine=engine)
-                if result is not None and len(result.faces) > 0:
-                    merged = result
-                    break
-            except Exception:
-                pass
+        result = _boolean("union", batch)
+        if result is not None:
+            merged = result
         batch_results.append(merged)
 
     if len(batch_results) == 1:
         return batch_results[0]
     final = trimesh.util.concatenate(batch_results)
-    for engine in ("manifold", "blender"):
-        try:
-            result = trimesh.boolean.union(batch_results, engine=engine)
-            if result is not None and len(result.faces) > 0:
-                return result
-        except Exception:
-            pass
-    return final
+    result = _boolean("union", batch_results)
+    return result if result is not None else final
 
 
 # ─────────────────────────────────────────────

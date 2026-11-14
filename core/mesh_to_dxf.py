@@ -232,22 +232,26 @@ bpy.ops.export_scene.obj(filepath=r"{tmp_obj}", use_selection=False)
 
 
 def _extract_silhouette(mesh, ax_h, ax_v, simplify_tol=0.01):
-    from shapely.geometry import Polygon
-    from shapely.ops import unary_union
-    verts = np.array(mesh.vertices)
-    faces = np.array(mesh.faces)
-    polys = []
-    for face in faces:
-        pts = verts[face][:, [ax_h, ax_v]]
-        try:
-            p = Polygon(pts)
-            if p.is_valid and p.area > 1e-9:
-                polys.append(p)
-        except Exception:
-            continue
-    if not polys:
+    """メッシュを (ax_h, ax_v) 平面に投影した外形(三角形の和集合)を返す。
+
+    三角形は shapely 2 のベクトル演算でまとめて作る。
+    手前向きの面だけに絞ると和集合は速くなるが、隣り合う三角形のあいだの数値の隙間が穴として残る
+    (サンプルで穴が 18 → 126 に増えた)ので、全ての面を使う。
+    """
+    import shapely
+
+    verts = np.asarray(mesh.vertices, dtype=np.float64)
+    faces = np.asarray(mesh.faces)
+    if len(faces) == 0:
         return None
-    union = unary_union(polys)
+
+    tri = verts[faces][:, :, [ax_h, ax_v]]
+    polys = shapely.polygons(tri)
+    keep = shapely.is_valid(polys) & (shapely.area(polys) > 1e-9)
+    polys = polys[keep]
+    if len(polys) == 0:
+        return None
+    union = shapely.union_all(polys)
     return union.simplify(simplify_tol) if simplify_tol > 0 else union
 
 
@@ -404,6 +408,55 @@ def _edge_visibility_zbuffer(
     return "visible" if visible_votes > n_samples // 2 else "hidden"
 
 
+def _edge_visibility_zbuffer_batch(
+    x0: np.ndarray, y0: np.ndarray,
+    x1: np.ndarray, y1: np.ndarray,
+    d0: np.ndarray, d1: np.ndarray,
+    z_buf: np.ndarray,
+    params: tuple,
+    tol_ratio: float = 0.015,
+    n_samples: int = 5,
+) -> np.ndarray:
+    """``_edge_visibility_zbuffer`` を全エッジに対してまとめて行う(結果は 1 本ずつの判定と同じ)。
+
+    Returns
+    -------
+    (E,) の bool 配列。True なら可視。
+    """
+    h_min, h_max, v_min, v_max, scale_h, scale_v, off_h, off_v, size = params
+    tol = max(h_max - h_min, 1e-9) * tol_ratio
+    t = np.linspace(0.1, 0.9, n_samples)[None, :]  # (1, S)
+
+    mx = x0[:, None] + t * (x1 - x0)[:, None]
+    my = y0[:, None] + t * (y1 - y0)[:, None]
+    md = d0[:, None] + t * (d1 - d0)[:, None]
+
+    # int() と同じく 0 に向かって切り捨てる
+    px = np.clip(np.trunc(mx * scale_h + off_h).astype(np.int64), 0, size - 1)
+    py = np.clip(np.trunc((1.0 - (my * scale_v + off_v) / size) * size).astype(np.int64), 0, size - 1)
+
+    zbuf_d = z_buf[py, px]
+    votes = np.isinf(zbuf_d) | (md <= zbuf_d + tol)
+    return votes.sum(axis=1) > n_samples // 2
+
+
+def _unique_edges(faces: np.ndarray) -> np.ndarray:
+    """三角形の辺を重複なしで返す(N, 2)。
+
+    順序は「その辺が最初に現れた順」、向きは「最後に現れたときの向き」(従来の dict と同じ)。
+    """
+    f = np.asarray(faces, dtype=np.int64)
+    a = f.reshape(-1)
+    b = np.roll(f, -1, axis=1).reshape(-1)
+    key = np.minimum(a, b) * (int(max(a.max(), b.max())) + 1) + np.maximum(a, b)
+    _, first = np.unique(key, return_index=True)
+    _, last_rev = np.unique(key[::-1], return_index=True)  # 逆順の最初 = 元の最後
+    last = len(key) - 1 - last_rev                          # np.unique は key の昇順で、first と同じ並び
+    order = np.argsort(first, kind="stable")
+    last = last[order]
+    return np.stack([a[last], b[last]], axis=1)
+
+
 def _get_silhouette_and_hidden(
     mesh,
     ax_h: int,
@@ -445,34 +498,23 @@ def _get_silhouette_and_hidden(
         ax_h, ax_v, ax_d, size=zbuf_size,
     )
 
-    # 全エッジを収集
-    edge_set: dict = {}
-    for face in faces:
-        for i in range(3):
-            a, b = face[i], face[(i+1) % 3]
-            key = (min(a, b), max(a, b))
-            edge_set[key] = (a, b)
+    # 全エッジを収集(重複なし)
+    edges = _unique_edges(faces)
+    logger.info(f"  エッジ可視性判定中 ({len(edges)}本)...")
 
-    logger.info(f"  エッジ可視性判定中 ({len(edge_set)}本)...")
-    silhouette = []
-    hidden     = []
+    ea, eb = edges[:, 0], edges[:, 1]
+    x0, y0 = verts[ea, ax_h], verts[ea, ax_v]
+    x1, y1 = verts[eb, ax_h], verts[eb, ax_v]
+    keep = np.hypot(x1 - x0, y1 - y0) >= 1e-9
+    ea, eb, x0, y0, x1, y1 = ea[keep], eb[keep], x0[keep], y0[keep], x1[keep], y1[keep]
 
-    for a, b in edge_set.values():
-        x0, y0 = verts[a, ax_h], verts[a, ax_v]
-        x1, y1 = verts[b, ax_h], verts[b, ax_v]
-        length = np.hypot(x1-x0, y1-y0)
-        if length < 1e-9:
-            continue
-
-        d0, d1 = verts[a, ax_d], verts[b, ax_d]
-        vis = _edge_visibility_zbuffer(
-            x0, y0, x1, y1, d0, d1,
-            z_buf, params, tol_ratio=tol_ratio,
-        )
-        if vis == "visible":
-            silhouette.append((x0, y0, x1, y1))
-        else:
-            hidden.append((x0, y0, x1, y1))
+    visible = _edge_visibility_zbuffer_batch(
+        x0, y0, x1, y1, verts[ea, ax_d], verts[eb, ax_d],
+        z_buf, params, tol_ratio=tol_ratio,
+    )
+    segs = np.stack([x0, y0, x1, y1], axis=1)
+    silhouette = [tuple(s) for s in segs[visible]]
+    hidden = [tuple(s) for s in segs[~visible]]
 
     logger.info(f"  可視={len(silhouette)}, 隠線={len(hidden)}")
     return silhouette, hidden
@@ -537,7 +579,75 @@ def _init_dxf(cfg: MeshToDxfConfig):
     return doc
 
 
-def _write_triview(doc, mesh, cfg, us, offset_y=0.0):
+def _add_edges(msp, bulk, edges, ox, oy, us, layer) -> None:
+    """辺の一覧(x0, y0, x1, y1)を、LINE として加える。``bulk`` があれば、保存のときにまとめて書く。"""
+    if not len(edges):
+        return
+    e = np.asarray(edges, dtype=np.float64).reshape(-1, 4)
+    segs = np.stack([ox + e[:, 0] * us, oy + e[:, 1] * us, ox + e[:, 2] * us, oy + e[:, 3] * us], axis=1)
+    if bulk is not None:
+        bulk.add(layer, segs)
+        return
+    for x0, y0, x1, y1 in segs.tolist():
+        msp.add_line((x0, y0), (x1, y1), dxfattribs={"layer": layer})
+
+
+class _BulkLines:
+    """大量の LINE を、ezdxf のエンティティを作らずに溜めて、保存のときに DXF の文字列として差し込む。
+
+    70 万本の LINE は、ezdxf では「作る」と「書き出す」で約 26 秒かかる(書き出しが約 7 割)。
+    ここでは座標を numpy 配列で持ち、書き出しは文字列の連結だけにする。
+    ハンドルは ezdxf の採番(``doc.entitydb.handles``)から取るので、他のエンティティと重ならない。
+    """
+
+    def __init__(self) -> None:
+        self._chunks: list[tuple[str, np.ndarray]] = []
+
+    def add(self, layer: str, segs: np.ndarray) -> None:
+        """segs: (N, 4) の ``x0, y0, x1, y1``(出力単位に直したもの)。"""
+        segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
+        if len(segs):
+            self._chunks.append((layer, segs))
+
+    def __len__(self) -> int:
+        return sum(len(s) for _, s in self._chunks)
+
+    def lines_text(self, doc) -> str:
+        owner = doc.modelspace().layout_key
+        next_handle = doc.entitydb.handles.next
+        out = []
+        for layer, segs in self._chunks:
+            head = "  8\n" + layer + "\n100\nAcDbLine\n"
+            for x0, y0, x1, y1 in segs.tolist():
+                out.append(
+                    f"  0\nLINE\n  5\n{next_handle()}\n330\n{owner}\n100\nAcDbEntity\n"
+                    f"{head} 10\n{x0!r}\n 20\n{y0!r}\n 30\n0.0\n 11\n{x1!r}\n 21\n{y1!r}\n 31\n0.0\n"
+                )
+        return "".join(out)
+
+
+def _save_dxf(doc, output_path: Path, bulk: Optional[_BulkLines] = None) -> None:
+    """DXF を保存する。``bulk`` があれば、その LINE を ENTITIES の末尾に差し込む。"""
+    if bulk is None or len(bulk) == 0:
+        doc.saveas(str(output_path))
+        return
+
+    import io
+
+    extra = bulk.lines_text(doc)  # 先にハンドルを採番する($HANDSEED が進む)
+    buf = io.StringIO()
+    doc.write(buf)
+    text = buf.getvalue()
+
+    # ENTITIES セクションの終わり(ENDSEC の手前)に差し込む
+    start = text.index("  2\nENTITIES\n")
+    end = text.index("  0\nENDSEC\n", start)
+    text = text[:end] + extra + text[end:]
+    with open(output_path, "wt", encoding=doc.output_encoding, errors="dxfreplace") as fp:  # ezdxf の saveas と同じ
+        fp.write(text)
+
+
+def _write_triview(doc, mesh, cfg, us, offset_y=0.0, bulk: Optional[_BulkLines] = None):
     msp = doc.modelspace()
     verts = np.array(mesh.vertices)
     ext = verts.max(axis=0) - verts.min(axis=0)  # [Xwidth, Ydepth, Zheight]
@@ -556,11 +666,7 @@ def _write_triview(doc, mesh, cfg, us, offset_y=0.0):
         )
 
         # シルエットエッジを VISIBLE レイヤーに描画
-        for x0, y0, x1, y1 in silhouette_edges:
-            msp.add_line(
-                (ox+x0*us, oy+y0*us), (ox+x1*us, oy+y1*us),
-                dxfattribs={"layer": cfg.layer_visible},
-            )
+        _add_edges(msp, bulk, silhouette_edges, ox, oy, us, cfg.layer_visible)
 
         # shapely シルエットも重ねて描画（外形輪郭を補完）
         sil_poly = _extract_silhouette(mesh, ax_h, ax_v, cfg.simplify_tolerance)
@@ -569,11 +675,7 @@ def _write_triview(doc, mesh, cfg, us, offset_y=0.0):
 
         # 隠線を HIDDEN レイヤーに描画
         if cfg.show_hidden_lines:
-            for x0, y0, x1, y1 in hidden_edges:
-                msp.add_line(
-                    (ox+x0*us, oy+y0*us), (ox+x1*us, oy+y1*us),
-                    dxfattribs={"layer": cfg.layer_hidden},
-                )
+            _add_edges(msp, bulk, hidden_edges, ox, oy, us, cfg.layer_hidden)
 
         # ラベル
         try:
@@ -679,17 +781,18 @@ def mesh_to_dxf(
 
     doc = _init_dxf(cfg)
     gap = cfg.view_gap * us
+    bulk = _BulkLines()
 
     if cfg.mode == "triview":
-        _write_triview(doc, mesh, cfg, us)
+        _write_triview(doc, mesh, cfg, us, bulk=bulk)
     elif cfg.mode == "floorplan":
         _write_floorplan(doc, mesh, cfg, us)
     elif cfg.mode == "both":
-        _write_triview(doc, mesh, cfg, us, offset_y=0.0)
+        _write_triview(doc, mesh, cfg, us, offset_y=0.0, bulk=bulk)
         # 三面図の下に平面図を配置
         fp_offset = (ext[2] + ext[1] + gap/us*2) * us
         _write_floorplan(doc, mesh, cfg, us, offset_y=fp_offset)
 
-    doc.saveas(str(output_path))
+    _save_dxf(doc, output_path, bulk)
     logger.info(f"DXF 保存: {output_path}")
     return output_path

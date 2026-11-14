@@ -126,6 +126,124 @@ def repair_mesh(mesh):
     return mesh
 
 
+def fill_small_holes(mesh, max_hole_ratio: float = 0.25):
+    """穴(境界の辺がつくる輪)を、輪の重心への扇形の三角形で閉じる。
+
+    trimesh の ``repair.fill_holes`` は、三角形と四角形の穴しか埋めない。マーチングキューブの出力には、
+    もっと大きい(数十辺の)穴が出るので、自前で埋める。
+
+    Parameters
+    ----------
+    max_hole_ratio : 輪の大きさ(外接箱の対角線)が、メッシュ全体の対角線のこの割合より大きい穴は、埋めない
+                     (底が開いたモデルの底面などを、でたらめな形で塞がないため)
+    """
+    import trimesh
+
+    faces = np.asarray(mesh.faces)
+    if len(faces) == 0:
+        return mesh
+
+    # 向きつきの辺 a->b のうち、逆向きの相手がいないものが境界。穴を塞ぐ面は、これを b->a でたどる
+    directed = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+    pairs = {(int(a), int(b)) for a, b in directed}
+    boundary = [(a, b) for a, b in pairs if (b, a) not in pairs]
+    if not boundary:
+        return mesh
+
+    # 穴を塞ぐ面は、境界の辺を逆向き(b -> a)にたどる
+    reverse = [(b, a) for a, b in boundary]
+    nxt: dict[int, list[int]] = {}
+    for src, dst in reverse:
+        nxt.setdefault(src, []).append(dst)
+
+    verts = np.asarray(mesh.vertices, dtype=np.float64)
+    diag = float(np.linalg.norm(mesh.bounds[1] - mesh.bounds[0])) or 1.0
+    new_verts = []
+    new_faces = []
+    used: set[tuple[int, int]] = set()
+    base = len(verts)
+
+    for start, first in sorted(reverse):
+        if (start, first) in used:
+            continue
+        loop = [start]
+        cur = first
+        used.add((start, first))
+        ok = True
+        while cur != start:
+            loop.append(cur)
+            candidates = [n for n in nxt.get(cur, []) if (cur, n) not in used]
+            if not candidates or len(loop) > len(reverse) + 1:
+                ok = False
+                break
+            n = candidates[0]
+            used.add((cur, n))
+            cur = n
+        if not ok or len(loop) < 3:
+            continue
+        pts = verts[loop]
+        if float(np.linalg.norm(pts.max(axis=0) - pts.min(axis=0))) > diag * max_hole_ratio:
+            continue
+        centre = pts.mean(axis=0)
+        ci = base + len(new_verts)
+        new_verts.append(centre)
+        for i in range(len(loop)):
+            new_faces.append([loop[i], loop[(i + 1) % len(loop)], ci])
+
+    if new_faces:
+        mesh = trimesh.Trimesh(
+            vertices=np.vstack([verts, np.array(new_verts)]),
+            faces=np.vstack([faces, np.array(new_faces, dtype=faces.dtype)]),
+            process=False,
+        )
+    return mesh
+
+
+def clean_inference_mesh(
+    mesh,
+    remove_floaters: bool = True,
+    floater_ratio: float = 0.02,
+    fill_holes: bool = True,
+    smooth_iterations: int = 0,
+):
+    """推論(マーチングキューブ)が出したメッシュの、見た目と形を整える。
+
+    - 浮島の除去 : 最大の連結成分の ``floater_ratio`` 未満の面数しかない成分を捨てる
+    - 穴埋め     : 小さい穴を閉じる(閉じないものは、そのまま)
+    - 平滑化     : Taubin(体積が縮まない)。階段状のノイズを均す。**角も丸くなる**ので、既定は 0(オフ)
+
+    平面図の押し出しのように、小さな壁が別の部品として正しく存在するメッシュには使わない。
+    """
+    import trimesh
+
+    n_before = len(mesh.faces)
+    if remove_floaters:
+        parts = mesh.split(only_watertight=False)
+        if len(parts) > 1:
+            biggest = max(len(p.faces) for p in parts)
+            kept = [p for p in parts if len(p.faces) >= biggest * floater_ratio]
+            if len(kept) < len(parts):
+                mesh = trimesh.util.concatenate(kept)
+
+    if fill_holes and not mesh.is_watertight:
+        try:
+            mesh = fill_small_holes(mesh)
+        except Exception as exc:
+            logger.debug("穴埋めに失敗: %s", exc)
+
+    if smooth_iterations > 0:
+        try:
+            # trimesh の filter_taubin は、1 回ごとに縮め(lamb)・膨らませ(nu)を交互に行う。nu は正の値。
+            # 縮みと膨らみを同じ回数にするため、smooth_iterations の 2 倍を指定する
+            trimesh.smoothing.filter_taubin(mesh, lamb=0.5, nu=0.53, iterations=2 * smooth_iterations)
+        except Exception as exc:
+            logger.debug("平滑化に失敗: %s", exc)
+
+    mesh.fix_normals()
+    logger.info(f"Inference mesh cleaned: faces {n_before} -> {len(mesh.faces)}, watertight={mesh.is_watertight}")
+    return mesh
+
+
 # ─────────────────────────────────────────────
 # LOD 生成
 # ─────────────────────────────────────────────

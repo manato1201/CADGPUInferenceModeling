@@ -57,6 +57,10 @@ class TripoSRConfig:
     device: Optional[str] = None
     # chunk size（VRAM節約。0=無効）
     chunk_size: int = 8192
+    # 推論後の整形(浮島の除去・穴埋め)。マーチングキューブの出力に付く細かいゴミを取る
+    cleanup: bool = True
+    # Taubin 平滑化の回数。0 でオフ(角が丸くなるので、有機的な形のときだけ上げる)
+    smooth_iterations: int = 0
 
 
 # ─────────────────────────────────────────────
@@ -357,6 +361,9 @@ class TripoSRInferencer:
             raise RuntimeError(f"未対応のメッシュ形式: {type(mesh)}")
 
         tm_mesh.fix_normals()
+        if self.config.cleanup:
+            from core.postprocessor import clean_inference_mesh
+            tm_mesh = clean_inference_mesh(tm_mesh, smooth_iterations=self.config.smooth_iterations)
         tm_mesh.export(str(output_path))
         logger.info(
             f"TripoSR: 保存 → {output_path} "
