@@ -20,8 +20,8 @@ OBJ / FBX / GLB → Z バッファで隠線判定 → 三面図 + 平面図 → 
 |---|---|
 | テスト | `.venv/Scripts/python -m pytest -q`(寸法精度・Z バッファ・API の堅牢性 + 文書の検査) |
 | GPU 推論 | 実機で確認。自動テストには**含まれない** |
-| 学習資料 | 講義 4 回あり。**保守・拡張の詳しい資料は未作成**(簡易版のみ) |
-| 既知の問題 | [docs/learn/index.md](docs/learn/index.md)(「壁寸法」が壁になる 等) |
+| 学習資料 | 講義 4 回 + 保守・拡張の学習資料 7 本(全体像・コードの読み方・内側・拡張・テスト・トラブル・用語集) |
+| 既知の問題 | [docs/learn/06-troubleshooting-maintenance.md](docs/learn/06-troubleshooting-maintenance.md)(API のファイル名の扱い・認証なし・「壁寸法」が壁になる 等) |
 
 ## クイックスタート
 
@@ -38,7 +38,7 @@ OBJ / FBX / GLB → Z バッファで隠線判定 → 三面図 + 平面図 → 
 |---|---|
 | 全体の地図 | [docs/index.md](docs/index.md) |
 | **基礎から学ぶ**(講義 4 回・実行できる例つき) | [docs/lecture/](docs/lecture/index.md) |
-| コードの地図・既知の問題 | [docs/learn/index.md](docs/learn/index.md) |
+| **保守・拡張する**(全体像・コードの読み方・内側・レシピ・テスト・トラブル・用語集) | [docs/learn/](docs/learn/index.md) |
 | セットアップ・使い方の**詳細**(旧 README) | [docs/reference/setup-and-operations.md](docs/reference/setup-and-operations.md) |
 | 技術資料(Mermaid) | [overview.md](overview.md)・[PERF_RESULTS.md](docs/PERF_RESULTS.md) |
 | 改善計画 | [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) |

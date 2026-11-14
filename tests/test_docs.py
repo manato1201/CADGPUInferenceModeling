@@ -30,7 +30,7 @@ REQUIRED_SECTIONS = ("## この回のゴール", "## 確認問題", "## 解答",
 
 def test_there_are_lectures_and_learning_pages():
     assert len(LECTURES) >= 5, f"講義が足りない ({len(LECTURES)})"
-    assert len(LEARN) >= 1, f"学習資料が足りない ({len(LEARN)})"
+    assert len(LEARN) >= 7, f"学習資料が足りない ({len(LEARN)})"
 
 
 @pytest.mark.parametrize("path", ALL_MD, ids=lambda p: str(p.relative_to(ROOT)))
@@ -70,7 +70,7 @@ def test_runnable_examples_run_and_print_what_the_page_says(path, tmp_path):
 
 def test_runnable_examples_exist_in_total():
     total = sum(len(list(_runnable(p))) for p in LECTURES + LEARN)
-    assert total >= 5, f"実行できる例が少ない ({total})"
+    assert total >= 6, f"実行できる例が少ない ({total})"
 
 
 _LINK = re.compile(r"(?<!\!)\[[^\]]*\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)|!\[[^\]]*\]\((?P<img>[^)\s]+)\)")
